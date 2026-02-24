@@ -1,0 +1,40 @@
+# Multi-Agent ESP32 Orchestration System
+
+# Core settings
+health_check_interval: 10       # seconds between device health-checks
+
+# Frequency agent defaults
+frequency_agent:
+  default_band: "2.4GHz"
+  hop_sequence:
+    - 2412000000
+    - 2437000000
+    - 2462000000
+
+# Modulation agent defaults
+modulation_agent:
+  default_scheme: "GFSK"
+
+# Firmware agent
+firmware_agent:
+  build_dir: "/tmp/esp32_builds"
+
+# Communications agent
+comms_agent:
+  cloud_connector: "http"         # http | aws | gcp | azure
+  cloud_endpoint: ""              # Set to your telemetry endpoint
+
+# AI agent
+ai_agent:
+  ai_research_endpoint: ""       # Optional LLM/cloud AI endpoint
+
+# API server
+server:
+  host: "0.0.0.0"
+  port: 8000
+
+# Logging
+logging:
+  level: "INFO"
+  log_dir: "logs"
+  json_format: false

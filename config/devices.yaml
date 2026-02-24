@@ -1,0 +1,39 @@
+# Device registry — add your ESP32 devices here
+# Loaded by main.py on startup (optional)
+
+devices:
+  - device_id: "esp32-001"
+    name: "Node-Alpha"
+    ip_address: "192.168.1.101"
+    mac_address: "AA:BB:CC:DD:EE:01"
+    capabilities:
+      - wifi
+      - ble
+      - gps
+    config:
+      firmware_version: "1.0.0"
+      frequency_hz: 2412000000
+
+  - device_id: "esp32-002"
+    name: "Node-Beta"
+    ip_address: "192.168.1.102"
+    mac_address: "AA:BB:CC:DD:EE:02"
+    capabilities:
+      - wifi
+      - ble
+    config:
+      firmware_version: "1.0.0"
+      frequency_hz: 2437000000
+
+  - device_id: "esp32-003"
+    name: "Node-Gamma"
+    ip_address: "192.168.1.103"
+    mac_address: "AA:BB:CC:DD:EE:03"
+    capabilities:
+      - wifi
+      - ble
+      - gps
+      - gnss
+    config:
+      firmware_version: "1.0.0"
+      frequency_hz: 2462000000
