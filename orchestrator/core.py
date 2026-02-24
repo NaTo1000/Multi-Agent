@@ -14,6 +14,7 @@ from typing import Any, Callable, Dict, List, Optional
 from .agent import AgentBase, AgentStatus
 from .device import ESP32Device, DeviceStatus
 from .scheduler import TaskScheduler
+from .router import TaskRouter
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +33,7 @@ class Orchestrator:
         self._agents: Dict[str, AgentBase] = {}
         self._devices: Dict[str, ESP32Device] = {}
         self._scheduler = TaskScheduler()
+        self._router = TaskRouter(config.get("router_weights") if config else None)
         self._event_listeners: Dict[str, List[Callable]] = defaultdict(list)
         self._running = False
         self._loop: Optional[asyncio.AbstractEventLoop] = None
@@ -146,6 +148,73 @@ class Orchestrator:
             *[self.dispatch_task(a.agent_id, task, params) for a in agents]
         )
         return list(task_ids)
+
+    async def route_task(
+        self,
+        agent_type: str,
+        task: str,
+        params: Optional[Dict[str, Any]] = None,
+        device_id: Optional[str] = None,
+        priority: int = 5,
+    ) -> str:
+        """
+        Route a task to the *best available* agent of *agent_type* using the
+        built-in :class:`TaskRouter` scoring algorithm.
+
+        The router evaluates all registered agents of the requested type on
+        three weighted criteria (availability, success-rate, recency) and
+        dispatches to the highest-scoring candidate.  The coroutine is queued
+        through the :class:`TaskScheduler` at the given *priority* (lower
+        value = higher urgency) so that concurrent workloads are scheduled
+        fairly.
+
+        Parameters
+        ----------
+        agent_type : str
+            The type of agent to target (e.g. ``"frequency_agent"``).
+        task : str
+            The task name understood by that agent type.
+        params : dict, optional
+            Task-specific parameters forwarded to the agent.
+        device_id : str, optional
+            Target ESP32 device identifier.
+        priority : int
+            Scheduler priority (default 5; lower = higher urgency).
+
+        Returns
+        -------
+        str
+            The unique task ID that can be passed to :meth:`get_task_result`.
+
+        Raises
+        ------
+        ValueError
+            If no agents of *agent_type* are registered.
+        """
+        candidates = self.get_agents_by_type(agent_type)
+        if not candidates:
+            raise ValueError(f"No agents of type '{agent_type}' registered")
+
+        agent = self._router.select(candidates)
+        if agent is None:
+            raise ValueError(
+                f"TaskRouter could not select an agent of type '{agent_type}'"
+            )
+
+        task_id = str(uuid.uuid4())
+        dispatch_coro = self.dispatch_task(agent.agent_id, task, params, device_id)
+        self._scheduler.schedule(dispatch_coro, task_id, priority=priority,
+                                 metadata={"agent_type": agent_type, "task": task})
+        inner_id = await self._scheduler.run_next()
+        # Expose the result under the outer task_id as well so callers can
+        # use either identifier with get_task_result().
+        if inner_id and inner_id != task_id:
+            self._task_results[task_id] = self._task_results.get(inner_id)
+        logger.info(
+            "route_task: %s → agent %s (priority=%d)",
+            task, agent.agent_id[:8], priority,
+        )
+        return inner_id or task_id
 
     def get_task_result(self, task_id: str) -> Optional[Dict[str, Any]]:
         return self._task_results.get(task_id)
