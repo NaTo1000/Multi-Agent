@@ -7,6 +7,9 @@ from .modulation_agent import ModulationAgent
 from .firmware_agent import FirmwareAgent
 from .comms_agent import CommsAgent
 from .ai_agent import AIAgent
+from .spectrum_agent import SpectrumAnalyzerAgent
+from .discovery_agent import DiscoveryAgent
+from .predictive_agent import PredictiveMaintenanceAgent
 
 __all__ = [
     "FrequencyAgent",
@@ -14,4 +17,7 @@ __all__ = [
     "FirmwareAgent",
     "CommsAgent",
     "AIAgent",
+    "SpectrumAnalyzerAgent",
+    "DiscoveryAgent",
+    "PredictiveMaintenanceAgent",
 ]
