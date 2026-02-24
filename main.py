@@ -56,6 +56,38 @@ def load_config(config_path: str) -> dict:
         return {}
 
 
+def load_devices(orchestrator, devices_config_path: str) -> None:
+    """Register devices from a YAML device-registry file."""
+    try:
+        import yaml
+        from orchestrator.device import ESP32Device, DeviceCapability
+        with open(devices_config_path, encoding="utf-8") as f:
+            data = yaml.safe_load(f) or {}
+        for entry in data.get("devices", []):
+            caps = []
+            for c in entry.get("capabilities", []):
+                try:
+                    caps.append(DeviceCapability(c))
+                except ValueError:
+                    logger.warning("Unknown capability '%s' in device registry", c)
+            device = ESP32Device(
+                device_id=entry["device_id"],
+                name=entry["name"],
+                ip_address=entry.get("ip_address"),
+                mac_address=entry.get("mac_address"),
+                capabilities=caps or None,
+                config=entry.get("config", {}),
+            )
+            orchestrator.register_device(device)
+        logger.info("Loaded %d device(s) from %s", len(data.get("devices", [])), devices_config_path)
+    except FileNotFoundError:
+        logger.info("Device registry not found at %s — skipping", devices_config_path)
+    except ImportError:
+        logger.warning("PyYAML not installed — skipping device registry")
+    except Exception as exc:  # pylint: disable=broad-except
+        logger.error("Failed to load device registry from %s: %s", devices_config_path, exc)
+
+
 # ------------------------------------------------------------------
 # Server mode
 # ------------------------------------------------------------------
@@ -219,6 +251,10 @@ def main():
         "--config", default="config/default.yaml", help="Path to YAML config file"
     )
     parser.add_argument(
+        "--devices", default="config/devices.yaml",
+        help="Path to YAML device registry file"
+    )
+    parser.add_argument(
         "--log-level", default="INFO",
         choices=["DEBUG", "INFO", "WARNING", "ERROR"],
     )
@@ -229,6 +265,7 @@ def main():
 
     config = load_config(args.config)
     orchestrator = build_orchestrator(config)
+    load_devices(orchestrator, args.devices)
 
     if args.mode == "server":
         run_server(orchestrator, host=args.host, port=args.port)
