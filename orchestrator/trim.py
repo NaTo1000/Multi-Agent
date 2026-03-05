@@ -265,7 +265,7 @@ class TrimOrchestrator:
             )
 
             phase_result = await self._execute_phase(
-                mode, ranked, task, params, device_id,
+                mode, ranked, task, params, device_id
             )
             result.phases.append(phase_result)
 
@@ -319,7 +319,7 @@ class TrimOrchestrator:
             start = time.monotonic()
             try:
                 task_id = await self._orchestrator.dispatch_task(
-                    agent.agent_id, task, weighted_params, device_id,
+                    agent.agent_id, task, weighted_params, device_id
                 )
                 elapsed = round((time.monotonic() - start) * 1000, 2)
                 self._record_execution(agent.agent_id, elapsed)
@@ -368,7 +368,7 @@ class TrimOrchestrator:
             start = time.monotonic()
             try:
                 task_id = await self._orchestrator.dispatch_task(
-                    agent.agent_id, task, weighted_params, device_id,
+                    agent.agent_id, task, weighted_params, device_id
                 )
                 elapsed = round((time.monotonic() - start) * 1000, 2)
                 self._record_execution(agent.agent_id, elapsed)

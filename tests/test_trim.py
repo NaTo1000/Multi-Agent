@@ -145,7 +145,7 @@ async def test_ranking_changes_after_task_execution(trim, wired_orchestrator):
     for _ in range(5):
         try:
             await wired_orchestrator.dispatch_task(
-                last_agent.agent_id, "get_frequency", {}, None,
+                last_agent.agent_id, "get_frequency", {}, None
             )
         except (ValueError, Exception):
             pass
