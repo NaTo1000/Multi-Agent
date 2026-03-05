@@ -97,7 +97,8 @@ class FrequencyAgent(AgentBase):
             channels.append({"frequency_hz": freq, "rssi": rssi})
             freq += step_hz
 
-        best = min(channels, key=lambda c: c["rssi"] if c["rssi"] is not None else 0)
+        # Higher (less negative) RSSI = better signal, so use max()
+        best = max(channels, key=lambda c: c["rssi"] if c["rssi"] is not None else -999)
         logger.info("Scan complete on %s — best channel: %.3f MHz",
                     band_name, best["frequency_hz"] / 1e6)
         return {"band": band_name, "channels": channels, "best_channel": best}

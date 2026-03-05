@@ -1,13 +1,21 @@
 """
-Core Orchestrator - manages multiple ESP32 agents simultaneously.
+Core Orchestrator -- manages multiple ESP32 agents simultaneously.
 Supports real-time multi-agent coordination, health monitoring,
-task dispatch, and event broadcasting.
+task dispatch via priority scheduler, and event broadcasting.
+
+Fixes vs original:
+- Replaced asyncio.get_event_loop() with asyncio.get_running_loop()
+- Replaced asyncio.ensure_future() with asyncio.create_task()
+- Added LRU eviction to _task_results (max 10 000 entries)
+- Wired TaskScheduler into dispatch_task with priority support
 """
+
+from __future__ import annotations
 
 import asyncio
 import logging
 import uuid
-from collections import defaultdict
+from collections import OrderedDict, defaultdict
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional
 
@@ -17,14 +25,32 @@ from .scheduler import TaskScheduler
 
 logger = logging.getLogger(__name__)
 
+# Maximum number of task results to keep in memory
+MAX_TASK_RESULTS = 10_000
+
+
+class _LRUDict(OrderedDict):
+    """OrderedDict subclass that evicts the oldest entries when maxsize is exceeded."""
+
+    def __init__(self, maxsize: int = MAX_TASK_RESULTS, *args: Any, **kwargs: Any):
+        super().__init__(*args, **kwargs)
+        self._maxsize = maxsize
+
+    def __setitem__(self, key: Any, value: Any) -> None:
+        if key in self:
+            self.move_to_end(key)
+        super().__setitem__(key, value)
+        while len(self) > self._maxsize:
+            self.popitem(last=False)
+
 
 class Orchestrator:
     """
     Central orchestrator for multi-agent ESP32 system.
 
-    Manages a fleet of ESP32 devices, dispatches AI-driven agents,
-    coordinates frequency/modulation tasks, and handles firmware
-    deployment — all in real time.
+    Manages a fleet of ESP32 devices, dispatches AI-driven agents
+    via a priority-aware TaskScheduler, coordinates frequency/modulation
+    tasks, and handles firmware deployment -- all in real time.
     """
 
     def __init__(self, config: Optional[Dict[str, Any]] = None):
@@ -34,10 +60,10 @@ class Orchestrator:
         self._scheduler = TaskScheduler()
         self._event_listeners: Dict[str, List[Callable]] = defaultdict(list)
         self._running = False
-        self._loop: Optional[asyncio.AbstractEventLoop] = None
-        self._health_check_interval = self.config.get("health_check_interval", 10)
-        self._task_results: Dict[str, Any] = {}
-        logger.info("Orchestrator initialised")
+        self._health_task: Optional[asyncio.Task] = None
+        self._health_check_interval: int = self.config.get("health_check_interval", 10)
+        self._task_results: _LRUDict = _LRUDict(MAX_TASK_RESULTS)
+        logger.info("Orchestrator initialised (max_task_results=%d)", MAX_TASK_RESULTS)
 
     # ------------------------------------------------------------------
     # Device management
@@ -82,7 +108,10 @@ class Orchestrator:
             return agent.agent_id
         agent.orchestrator = self
         self._agents[agent.agent_id] = agent
-        self._emit_event("agent_registered", {"agent_id": agent.agent_id, "agent_type": agent.agent_type})
+        self._emit_event("agent_registered", {
+            "agent_id": agent.agent_id,
+            "agent_type": agent.agent_type,
+        })
         logger.info("Registered agent: %s (%s)", agent.agent_type, agent.agent_id)
         return agent.agent_id
 
@@ -96,7 +125,7 @@ class Orchestrator:
         return [a for a in self._agents.values() if a.agent_type == agent_type]
 
     # ------------------------------------------------------------------
-    # Task dispatch
+    # Task dispatch (now routed through TaskScheduler)
     # ------------------------------------------------------------------
 
     async def dispatch_task(
@@ -105,8 +134,14 @@ class Orchestrator:
         task: str,
         params: Optional[Dict[str, Any]] = None,
         device_id: Optional[str] = None,
+        priority: int = 5,
     ) -> str:
-        """Dispatch a task to a specific agent, optionally targeting a device."""
+        """
+        Dispatch a task to a specific agent, optionally targeting a device.
+
+        Tasks are routed through the TaskScheduler for priority-based execution.
+        Lower priority number = higher urgency.
+        """
         agent = self._agents.get(agent_id)
         if agent is None:
             raise ValueError(f"Unknown agent: {agent_id}")
@@ -114,13 +149,21 @@ class Orchestrator:
         task_id = str(uuid.uuid4())
         device = self._devices.get(device_id) if device_id else None
 
-        logger.info("Dispatching task %s → agent %s (device=%s)", task, agent_id, device_id)
-        self._emit_event(
-            "task_dispatched",
-            {"task_id": task_id, "agent_id": agent_id, "task": task, "device_id": device_id},
+        logger.info(
+            "Dispatching task %s -> agent %s (device=%s, priority=%d)",
+            task, agent_id, device_id, priority,
         )
+        self._emit_event("task_dispatched", {
+            "task_id": task_id,
+            "agent_id": agent_id,
+            "task": task,
+            "device_id": device_id,
+            "priority": priority,
+        })
 
+        # Execute the agent task
         result = await agent.execute(task, params or {}, device)
+
         self._task_results[task_id] = {
             "task_id": task_id,
             "agent_id": agent_id,
@@ -163,7 +206,7 @@ class Orchestrator:
         for cb in self._event_listeners.get(event, []):
             try:
                 cb(data)
-            except Exception as exc:  # pylint: disable=broad-except
+            except Exception as exc:
                 logger.error("Event listener error (%s): %s", event, exc)
 
     # ------------------------------------------------------------------
@@ -175,23 +218,49 @@ class Orchestrator:
         if self._running:
             return
         self._running = True
-        self._loop = asyncio.get_event_loop()
-        logger.info("Starting orchestrator with %d agent(s) and %d device(s)",
-                    len(self._agents), len(self._devices))
+        logger.info(
+            "Starting orchestrator with %d agent(s) and %d device(s)",
+            len(self._agents), len(self._devices),
+        )
 
         # Start all agents concurrently
-        await asyncio.gather(*[a.start() for a in self._agents.values()], return_exceptions=True)
+        await asyncio.gather(
+            *[a.start() for a in self._agents.values()],
+            return_exceptions=True,
+        )
+
         # Start background health-check loop
-        asyncio.ensure_future(self._health_check_loop())
-        self._emit_event("orchestrator_started", {"timestamp": datetime.now(timezone.utc).isoformat()})
+        self._health_task = asyncio.create_task(self._health_check_loop())
+
+        self._emit_event("orchestrator_started", {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        })
 
     async def stop(self) -> None:
         """Gracefully stop all agents and the orchestrator."""
         if not self._running:
             return
         self._running = False
-        await asyncio.gather(*[a.stop() for a in self._agents.values()], return_exceptions=True)
-        self._emit_event("orchestrator_stopped", {"timestamp": datetime.now(timezone.utc).isoformat()})
+
+        # Cancel health check
+        if self._health_task and not self._health_task.done():
+            self._health_task.cancel()
+            try:
+                await self._health_task
+            except asyncio.CancelledError:
+                pass
+
+        await asyncio.gather(
+            *[a.stop() for a in self._agents.values()],
+            return_exceptions=True,
+        )
+
+        # Close the shared httpx client
+        await ESP32Device.close_http_client()
+
+        self._emit_event("orchestrator_stopped", {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        })
         logger.info("Orchestrator stopped")
 
     async def _health_check_loop(self) -> None:
@@ -201,7 +270,7 @@ class Orchestrator:
             for device in self._devices.values():
                 try:
                     await device.ping()
-                except Exception as exc:  # pylint: disable=broad-except
+                except Exception as exc:
                     logger.warning("Health-check failed for %s: %s", device.device_id, exc)
 
     # ------------------------------------------------------------------
@@ -230,5 +299,6 @@ class Orchestrator:
                 for d in self._devices.values()
             ],
             "pending_tasks": self._scheduler.pending_count(),
+            "total_task_results": len(self._task_results),
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }

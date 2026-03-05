@@ -1,17 +1,56 @@
 """
-WebSocket endpoint — streams real-time telemetry and orchestrator events
+WebSocket endpoint -- streams real-time telemetry and orchestrator events
 to connected clients (mobile apps, web dashboards).
+
+Fixed: replaced asyncio.ensure_future with asyncio.create_task,
+       scoped connection set to app state instead of module-level global.
 """
+
+from __future__ import annotations
 
 import asyncio
 import json
 import logging
-from typing import Any, Dict, List, Set
+from typing import Any, Dict, Set
 
 logger = logging.getLogger(__name__)
 
-# Global set of active WebSocket connections
-_connections: Set[Any] = set()
+
+class ConnectionManager:
+    """Manages the set of active WebSocket connections (app-scoped, not global)."""
+
+    def __init__(self) -> None:
+        self._connections: Set[Any] = set()
+
+    def add(self, ws: Any) -> None:
+        self._connections.add(ws)
+
+    def discard(self, ws: Any) -> None:
+        self._connections.discard(ws)
+
+    async def broadcast(self, event: Dict[str, Any]) -> None:
+        """Broadcast an event to all connected WebSocket clients."""
+        payload = json.dumps(event)
+        dead: Set[Any] = set()
+        for ws in self._connections:
+            try:
+                await ws.send_text(payload)
+            except Exception:
+                dead.add(ws)
+        self._connections.difference_update(dead)
+
+    @property
+    def count(self) -> int:
+        return len(self._connections)
+
+
+# Singleton manager (attached to app state during router mount)
+_manager = ConnectionManager()
+
+
+def get_connection_manager() -> ConnectionManager:
+    """Return the singleton ConnectionManager."""
+    return _manager
 
 
 def build_ws_router():
@@ -32,12 +71,13 @@ def build_ws_router():
           {"command": "dispatch", "agent_id": "...", "task": "...", "params": {...}}
         """
         await websocket.accept()
-        _connections.add(websocket)
+        _manager.add(websocket)
         orchestrator = websocket.app.state.orchestrator
-        logger.info("WebSocket client connected")
+        logger.info("WebSocket client connected (total=%d)", _manager.count)
 
+        push_task: asyncio.Task | None = None
         try:
-            async def _push_loop():
+            async def _push_loop() -> None:
                 while True:
                     try:
                         status = orchestrator.get_status()
@@ -48,11 +88,11 @@ def build_ws_router():
                             "devices": devices,
                         })
                         await websocket.send_text(payload)
-                    except Exception:  # pylint: disable=broad-except
+                    except Exception:
                         break
                     await asyncio.sleep(1)
 
-            push_task = asyncio.ensure_future(_push_loop())
+            push_task = asyncio.create_task(_push_loop())
 
             # Receive loop
             while True:
@@ -67,8 +107,9 @@ def build_ws_router():
         except WebSocketDisconnect:
             logger.info("WebSocket client disconnected")
         finally:
-            _connections.discard(websocket)
-            push_task.cancel()
+            _manager.discard(websocket)
+            if push_task and not push_task.done():
+                push_task.cancel()
 
     return router
 
@@ -102,12 +143,5 @@ async def _handle_ws_message(
 
 
 async def broadcast_event(event: Dict[str, Any]) -> None:
-    """Broadcast an event to all connected WebSocket clients."""
-    payload = json.dumps(event)
-    dead = set()
-    for ws in _connections:
-        try:
-            await ws.send_text(payload)
-        except Exception:  # pylint: disable=broad-except
-            dead.add(ws)
-    _connections.difference_update(dead)
+    """Convenience wrapper for broadcasting events."""
+    await _manager.broadcast(event)

@@ -108,7 +108,7 @@ class GPSManager:
     async def start(self) -> None:
         """Start reading GPS data from the serial port."""
         self._running = True
-        asyncio.ensure_future(self._read_loop())
+        self._read_task = asyncio.create_task(self._read_loop())
 
     async def stop(self) -> None:
         self._running = False

@@ -9,12 +9,14 @@ Provides:
 - Natural-language research + recommendation generation
 """
 
+import asyncio
 import logging
-import math
 import statistics
 from collections import deque
 from datetime import datetime, timezone
 from typing import Any, Deque, Dict, List, Optional
+
+import httpx
 
 from orchestrator.agent import AgentBase
 from orchestrator.device import ESP32Device
@@ -280,17 +282,15 @@ class AIAgent(AgentBase):
 
         if endpoint:
             try:
-                import json
-                import urllib.request
-
-                body = json.dumps({"query": query, "context": params.get("context", {})}).encode()
-                req = urllib.request.Request(
-                    endpoint, data=body, headers={"Content-Type": "application/json"}
-                )
-                with urllib.request.urlopen(req, timeout=30) as resp:
-                    return json.loads(resp.read())
-            except Exception as exc:  # pylint: disable=broad-except
-                logger.warning("AI research endpoint failed: %s — using heuristics", exc)
+                async with httpx.AsyncClient(timeout=30.0) as client:
+                    resp = await client.post(
+                        endpoint,
+                        json={"query": query, "context": params.get("context", {})},
+                    )
+                    resp.raise_for_status()
+                    return resp.json()
+            except Exception as exc:
+                logger.warning("AI research endpoint failed: %s -- using heuristics", exc)
 
         # Built-in heuristic response
         return {
@@ -311,7 +311,6 @@ class AIAgent(AgentBase):
         if not self.orchestrator:
             return {"tuned": 0}
         devices = self.orchestrator.get_online_devices()
-        import asyncio
         results = await asyncio.gather(
             *[self._auto_optimise(params, d) for d in devices],
             return_exceptions=True,

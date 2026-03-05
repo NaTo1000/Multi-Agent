@@ -1,13 +1,19 @@
 """
-ESP32 device model — represents a single physical ESP32 module.
+ESP32 device model -- represents a single physical ESP32 module.
 Stores connectivity info, current firmware version, and capability flags.
+
+Uses httpx for non-blocking async HTTP communication with devices.
 """
+
+from __future__ import annotations
 
 import asyncio
 import logging
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Dict, List, Optional
+
+import httpx
 
 logger = logging.getLogger(__name__)
 
@@ -34,8 +40,28 @@ class ESP32Device:
 
     Tracks connectivity, hardware capabilities, current operating
     frequency, firmware version, and provides async helpers for
-    sending commands over the air.
+    sending commands over the air via non-blocking httpx.
     """
+
+    # Shared httpx client -- initialised once per process for connection pooling
+    _http_client: Optional[httpx.AsyncClient] = None
+
+    @classmethod
+    def get_http_client(cls) -> httpx.AsyncClient:
+        """Return (and lazily create) the shared async HTTP client."""
+        if cls._http_client is None or cls._http_client.is_closed:
+            cls._http_client = httpx.AsyncClient(
+                timeout=httpx.Timeout(10.0, connect=5.0),
+                limits=httpx.Limits(max_connections=100, max_keepalive_connections=20),
+            )
+        return cls._http_client
+
+    @classmethod
+    async def close_http_client(cls) -> None:
+        """Gracefully close the shared HTTP client (call on shutdown)."""
+        if cls._http_client and not cls._http_client.is_closed:
+            await cls._http_client.aclose()
+            cls._http_client = None
 
     def __init__(
         self,
@@ -75,7 +101,6 @@ class ESP32Device:
             self.status = DeviceStatus.OFFLINE
             return False
         try:
-            # Use asyncio subprocess for a non-blocking ping
             proc = await asyncio.create_subprocess_exec(
                 "ping", "-c", "1", "-W", "2", self.ip_address,
                 stdout=asyncio.subprocess.DEVNULL,
@@ -87,31 +112,39 @@ class ESP32Device:
             if online:
                 self.last_seen = datetime.now(timezone.utc).isoformat()
             return online
-        except Exception as exc:  # pylint: disable=broad-except
+        except Exception as exc:
             logger.warning("Ping failed for %s: %s", self.device_id, exc)
             self.status = DeviceStatus.OFFLINE
             return False
 
-    async def send_command(self, command: str, payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    async def send_command(
+        self, command: str, payload: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
         """
-        Send a JSON command to the device via HTTP.
+        Send a JSON command to the device via async HTTP (httpx).
         Requires the device to be running the companion firmware.
         """
-        import json
-        import urllib.request
-
         if not self.ip_address:
             raise ConnectionError(f"Device {self.device_id} has no IP address")
 
         url = f"http://{self.ip_address}/api/command"
-        body = json.dumps({"command": command, "payload": payload or {}}).encode()
-        req = urllib.request.Request(url, data=body, headers={"Content-Type": "application/json"})
+        body = {"command": command, "payload": payload or {}}
+
+        client = self.get_http_client()
         try:
-            with urllib.request.urlopen(req, timeout=10) as resp:
-                return json.loads(resp.read())
-        except Exception as exc:
-            logger.error("Command '%s' failed on %s: %s", command, self.device_id, exc)
+            resp = await client.post(url, json=body)
+            resp.raise_for_status()
+            return resp.json()
+        except httpx.TimeoutException as exc:
+            logger.error("Timeout sending '%s' to %s: %s", command, self.device_id, exc)
+            raise ConnectionError(f"Timeout communicating with {self.device_id}") from exc
+        except httpx.HTTPStatusError as exc:
+            logger.error("HTTP %d from %s on '%s': %s", exc.response.status_code,
+                         self.device_id, command, exc)
             raise
+        except httpx.RequestError as exc:
+            logger.error("Command '%s' failed on %s: %s", command, self.device_id, exc)
+            raise ConnectionError(str(exc)) from exc
 
     # ------------------------------------------------------------------
     # Frequency / modulation
@@ -126,7 +159,7 @@ class ESP32Device:
                 logger.info("Device %s tuned to %.3f MHz", self.device_id, frequency_hz / 1e6)
                 return True
             return False
-        except Exception:  # pylint: disable=broad-except
+        except Exception:
             return False
 
     async def get_rssi(self) -> Optional[int]:
@@ -135,7 +168,7 @@ class ESP32Device:
             resp = await self.send_command("get_rssi")
             self.rssi = resp.get("rssi")
             return self.rssi
-        except Exception:  # pylint: disable=broad-except
+        except Exception:
             return None
 
     # ------------------------------------------------------------------
@@ -154,7 +187,7 @@ class ESP32Device:
                 return True
             self.status = DeviceStatus.ERROR
             return False
-        except Exception as exc:  # pylint: disable=broad-except
+        except Exception as exc:
             logger.error("OTA update failed on %s: %s", self.device_id, exc)
             self.status = DeviceStatus.ERROR
             return False

@@ -97,11 +97,17 @@ class AutomationEngine:
         if self._running:
             return
         self._running = True
-        asyncio.ensure_future(self._automation_loop())
+        self._loop_task = asyncio.create_task(self._automation_loop())
         logger.info("AutomationEngine started with %d policies", len(self._policies))
 
     async def stop(self) -> None:
         self._running = False
+        if hasattr(self, "_loop_task") and self._loop_task and not self._loop_task.done():
+            self._loop_task.cancel()
+            try:
+                await self._loop_task
+            except asyncio.CancelledError:
+                pass
         logger.info("AutomationEngine stopped")
 
     # ------------------------------------------------------------------
@@ -111,17 +117,18 @@ class AutomationEngine:
     async def _automation_loop(self) -> None:
         """Background loop that evaluates and fires automation policies."""
         policy_timers: Dict[str, float] = {}
-        loop_start = asyncio.get_event_loop().time()
+        loop = asyncio.get_running_loop()
+        loop_start = loop.time()
 
         while self._running:
-            now = asyncio.get_event_loop().time()
+            now = loop.time()
             for policy in self._policies:
                 if not policy.enabled:
                     continue
                 last = policy_timers.get(policy.name, loop_start - policy.interval_sec)
                 if now - last >= policy.interval_sec:
                     policy_timers[policy.name] = now
-                    asyncio.ensure_future(self._run_policy(policy))
+                    asyncio.create_task(self._run_policy(policy))
             await asyncio.sleep(1)
 
     async def _run_policy(self, policy: AutomationPolicy) -> None:

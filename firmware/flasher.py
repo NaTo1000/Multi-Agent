@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 
 class _BinaryHTTPHandler(http.server.SimpleHTTPRequestHandler):
-    """Minimal HTTP handler that serves a single binary file."""
+    """Minimal HTTP handler that serves files from a specific directory."""
 
     def log_message(self, fmt, *args):  # suppress noisy access log
         pass
@@ -38,13 +38,19 @@ class OTAFlasher:
     # ------------------------------------------------------------------
 
     def _start_server(self, serve_dir: str) -> None:
-        os.chdir(serve_dir)
-        self._server = http.server.HTTPServer(("", self.port), _BinaryHTTPHandler)
+        """Start a temporary HTTP server that serves files from serve_dir
+        without changing the process-global working directory."""
+        import functools
+
+        handler_class = functools.partial(
+            _BinaryHTTPHandler, directory=serve_dir
+        )
+        self._server = http.server.HTTPServer(("", self.port), handler_class)
         self._server_thread = threading.Thread(
             target=self._server.serve_forever, daemon=True
         )
         self._server_thread.start()
-        logger.info("OTA HTTP server started on %s:%d", self.host_ip, self.port)
+        logger.info("OTA HTTP server started on %s:%d (serving %s)", self.host_ip, self.port, serve_dir)
 
     def _stop_server(self) -> None:
         if self._server:

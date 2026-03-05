@@ -1,19 +1,23 @@
 """
-Cloud connector — pluggable backends for telemetry upload and heavy compute offload.
+Cloud connector -- pluggable backends for telemetry upload and heavy compute offload.
 
 Supported connectors:
-  - http    : generic HTTP POST (default)
-  - aws     : AWS IoT Core via MQTT / HTTPS
-  - gcp     : GCP Pub/Sub
-  - azure   : Azure IoT Hub
+  - http    : generic HTTP POST (default) -- uses async httpx
+  - aws     : AWS IoT Core via MQTT / HTTPS -- uses asyncio.to_thread for boto3
+  - gcp     : GCP Pub/Sub -- uses asyncio.to_thread
+  - azure   : Azure IoT Hub -- uses asyncio.to_thread
 """
 
+from __future__ import annotations
+
+import asyncio
 import json
 import logging
-import urllib.request
-import urllib.error
+import os
 from abc import ABC, abstractmethod
 from typing import Any, Dict, Optional
+
+import httpx
 
 logger = logging.getLogger(__name__)
 
@@ -39,7 +43,7 @@ class CloudConnector(ABC):
         connector_type: str,
         endpoint: str,
         config: Optional[Dict[str, Any]] = None,
-    ) -> "CloudConnector":
+    ) -> CloudConnector:
         """Factory method."""
         config = config or {}
         connectors = {
@@ -50,31 +54,35 @@ class CloudConnector(ABC):
         }
         klass = connectors.get(connector_type.lower())
         if klass is None:
-            raise ValueError(f"Unknown connector type: {connector_type}. "
-                             f"Choose from {list(connectors)}")
+            raise ValueError(
+                f"Unknown connector type: {connector_type}. "
+                f"Choose from {list(connectors)}"
+            )
         return klass(endpoint, config)
 
 
 class HTTPConnector(CloudConnector):
-    """Generic HTTP POST connector."""
+    """Generic HTTP POST connector using async httpx."""
 
     async def push(self, payload: Dict[str, Any]) -> bool:
         if not self.endpoint:
             logger.debug("HTTP connector: no endpoint configured, skipping push")
-            return True  # Treat as success in development
+            return True
+        api_key = self.config.get("api_key") or os.environ.get("CLOUD_API_KEY", "")
         try:
-            body = json.dumps(payload).encode()
-            headers = {
-                "Content-Type": "application/json",
-                "Authorization": f"Bearer {self.config.get('api_key', '')}",
-            }
-            req = urllib.request.Request(self.endpoint, data=body, headers=headers)
-            with urllib.request.urlopen(req, timeout=10) as resp:
-                return 200 <= resp.status < 300
-        except urllib.error.HTTPError as exc:
-            logger.error("HTTP push failed: %s %s", exc.code, exc.reason)
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.post(
+                    self.endpoint,
+                    json=payload,
+                    headers={
+                        "Authorization": f"Bearer {api_key}",
+                    },
+                )
+                return 200 <= resp.status_code < 300
+        except httpx.HTTPStatusError as exc:
+            logger.error("HTTP push failed: %d %s", exc.response.status_code, exc.response.text)
             return False
-        except Exception as exc:  # pylint: disable=broad-except
+        except Exception as exc:
             logger.error("HTTP push error: %s", exc)
             return False
 
@@ -85,9 +93,11 @@ class HTTPConnector(CloudConnector):
             url = f"{self.endpoint}/messages"
             if topic:
                 url += f"?topic={topic}"
-            with urllib.request.urlopen(url, timeout=10) as resp:
-                return json.loads(resp.read())
-        except Exception as exc:  # pylint: disable=broad-except
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.get(url)
+                resp.raise_for_status()
+                return resp.json()
+        except Exception as exc:
             logger.error("HTTP pull error: %s", exc)
             return None
 
@@ -95,24 +105,28 @@ class HTTPConnector(CloudConnector):
 class AWSConnector(CloudConnector):
     """
     AWS IoT Core connector.
-    Uses boto3 (if installed) for MQTT-over-WebSocket or HTTPS Data API.
+    Uses boto3 (synchronous) wrapped in asyncio.to_thread for non-blocking execution.
     """
 
     async def push(self, payload: Dict[str, Any]) -> bool:
         try:
             import boto3  # type: ignore
-            client = boto3.client(
-                "iot-data",
-                endpoint_url=self.endpoint,
-                region_name=self.config.get("aws_region", "us-east-1"),
-            )
-            topic = self.config.get("aws_topic", "esp32/telemetry")
-            client.publish(topic=topic, qos=1, payload=json.dumps(payload))
-            return True
+
+            def _sync_push() -> bool:
+                client = boto3.client(
+                    "iot-data",
+                    endpoint_url=self.endpoint,
+                    region_name=self.config.get("aws_region", "us-east-1"),
+                )
+                topic = self.config.get("aws_topic", "esp32/telemetry")
+                client.publish(topic=topic, qos=1, payload=json.dumps(payload))
+                return True
+
+            return await asyncio.to_thread(_sync_push)
         except ImportError:
-            logger.warning("boto3 not installed — AWS push unavailable")
+            logger.warning("boto3 not installed -- AWS push unavailable")
             return False
-        except Exception as exc:  # pylint: disable=broad-except
+        except Exception as exc:
             logger.error("AWS push error: %s", exc)
             return False
 
@@ -123,22 +137,25 @@ class AWSConnector(CloudConnector):
 class GCPConnector(CloudConnector):
     """
     GCP Pub/Sub connector.
-    Requires google-cloud-pubsub to be installed.
+    Uses google-cloud-pubsub (synchronous) wrapped in asyncio.to_thread.
     """
 
     async def push(self, payload: Dict[str, Any]) -> bool:
         try:
             from google.cloud import pubsub_v1  # type: ignore
-            publisher = pubsub_v1.PublisherClient()
-            topic_path = self.endpoint  # should be "projects/{p}/topics/{t}"
-            data = json.dumps(payload).encode()
-            future = publisher.publish(topic_path, data)
-            future.result(timeout=10)
-            return True
+
+            def _sync_push() -> bool:
+                publisher = pubsub_v1.PublisherClient()
+                data = json.dumps(payload).encode()
+                future = publisher.publish(self.endpoint, data)
+                future.result(timeout=10)
+                return True
+
+            return await asyncio.to_thread(_sync_push)
         except ImportError:
-            logger.warning("google-cloud-pubsub not installed — GCP push unavailable")
+            logger.warning("google-cloud-pubsub not installed -- GCP push unavailable")
             return False
-        except Exception as exc:  # pylint: disable=broad-except
+        except Exception as exc:
             logger.error("GCP push error: %s", exc)
             return False
 
@@ -149,25 +166,30 @@ class GCPConnector(CloudConnector):
 class AzureConnector(CloudConnector):
     """
     Azure IoT Hub connector.
-    Requires azure-iot-device to be installed.
+    Uses azure-iot-device (synchronous) wrapped in asyncio.to_thread.
     """
 
     async def push(self, payload: Dict[str, Any]) -> bool:
         try:
             from azure.iot.device import IoTHubDeviceClient, Message  # type: ignore
+
             conn_str = self.config.get("azure_connection_string", "")
             if not conn_str:
                 logger.warning("azure_connection_string not configured")
                 return False
-            client = IoTHubDeviceClient.create_from_connection_string(conn_str)
-            msg = Message(json.dumps(payload))
-            client.send_message(msg)
-            client.shutdown()
-            return True
+
+            def _sync_push() -> bool:
+                client = IoTHubDeviceClient.create_from_connection_string(conn_str)
+                msg = Message(json.dumps(payload))
+                client.send_message(msg)
+                client.shutdown()
+                return True
+
+            return await asyncio.to_thread(_sync_push)
         except ImportError:
-            logger.warning("azure-iot-device not installed — Azure push unavailable")
+            logger.warning("azure-iot-device not installed -- Azure push unavailable")
             return False
-        except Exception as exc:  # pylint: disable=broad-except
+        except Exception as exc:
             logger.error("Azure push error: %s", exc)
             return False
 
