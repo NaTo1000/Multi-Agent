@@ -22,6 +22,7 @@ logger = logging.getLogger(__name__)
 def build_orchestrator(config: dict):
     """Instantiate and wire up the full orchestrator."""
     from orchestrator import Orchestrator
+    from orchestrator.trim import TrimOrchestrator
     from agents import (
         AIAgent,
         CommsAgent,
@@ -38,6 +39,13 @@ def build_orchestrator(config: dict):
     orch.register_agent(FirmwareAgent(config.get("firmware_agent", {})))
     orch.register_agent(CommsAgent(config.get("comms_agent", {})))
     orch.register_agent(AIAgent(config.get("ai_agent", {})))
+
+    # Attach trim orchestrator for strength-ranked parallel/series execution
+    trim_config = config.get("trim", {})
+    orch.trim = TrimOrchestrator(
+        orch,
+        monitor_interval=trim_config.get("monitor_interval", 5),
+    )
 
     return orch
 
@@ -157,6 +165,27 @@ async def run_demo(orchestrator):
             print(f"    build_id:  {build_info.get('build_id')}")
             print(f"    version:   {build_info.get('version')}")
             print(f"    compiled:  {build_info.get('compiled')}")
+
+    # Demo: Trim Orchestrator — strength-ranked parallel/series cycle
+    if hasattr(orchestrator, "trim"):
+        print("\n  --- Trim Orchestrator Demo ---")
+        trim = orchestrator.trim
+        profiles = trim.assess_strengths()
+        print(f"  Agent rankings ({len(profiles)} agents):")
+        for p in profiles:
+            print(f"    #{p.rank} {p.agent_type}: score={p.score}, multiplier={p.multiplier}")
+
+        cycle = await trim.run_trim_cycle("get_frequency", {}, num_phases=4)
+        print(f"\n  Trim cycle #{cycle.cycle_id} complete:")
+        print(f"    Mode sequence: {cycle.mode_sequence}")
+        print(f"    Duration: {cycle.total_duration_ms:.1f} ms")
+        for i, phase in enumerate(cycle.phases):
+            ok = sum(1 for r in phase["agent_results"] if r["success"])
+            total = len(phase["agent_results"])
+            print(f"    Phase {i+1} [{phase['mode']}]: {ok}/{total} succeeded")
+
+        print(f"\n  Trim status: {trim.get_status()['current_mode']} mode, "
+              f"{trim.cycle_count} cycle(s)")
 
     await orchestrator.stop()
     print("\n  Orchestrator stopped — demo complete.\n")
