@@ -28,6 +28,7 @@ def build_orchestrator(config: dict):
         FirmwareAgent,
         FrequencyAgent,
         ModulationAgent,
+        FlipperAgent,
     )
 
     orch = Orchestrator(config)
@@ -38,6 +39,10 @@ def build_orchestrator(config: dict):
     orch.register_agent(FirmwareAgent(config.get("firmware_agent", {})))
     orch.register_agent(CommsAgent(config.get("comms_agent", {})))
     orch.register_agent(AIAgent(config.get("ai_agent", {})))
+
+    # Register Flipper Zero agent (runs in simulated mode if no port configured)
+    flipper_cfg = config.get("flipper_zero", {})
+    orch.register_agent(FlipperAgent(flipper_cfg))
 
     return orch
 
