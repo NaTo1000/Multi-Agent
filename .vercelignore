@@ -1,0 +1,22 @@
+# Python backend files (not part of Next.js deployment)
+agents/
+ai/
+api/
+cloud/
+comms/
+firmware/
+logging_system/
+orchestrator/
+tests/
+main.py
+pytest.ini
+*.py
+__pycache__/
+.pytest_cache/
+
+# Legacy mobile app
+legacy-mobile-app/
+
+# Development files
+*.md
+.git/
