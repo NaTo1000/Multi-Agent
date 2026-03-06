@@ -15,7 +15,7 @@ export async function startCheckoutSession(productId: string) {
 
   const session = await stripe.checkout.sessions.create({
     ui_mode: "embedded",
-    redirect_on_completion: "never",
+    return_url: `${origin}/checkout/success?session_id={CHECKOUT_SESSION_ID}`,
     line_items: [
       {
         price_data: {
