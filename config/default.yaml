@@ -28,6 +28,14 @@ comms_agent:
 ai_agent:
   ai_research_endpoint: ""       # Optional LLM/cloud AI endpoint
 
+# Flipper Zero agent
+# Set port to a real serial device path (e.g. /dev/ttyACM0) to use real hardware.
+# Leave port unset (or set to null) to run in simulated mode.
+flipper_zero:
+  port: null                      # null = simulated mode; "/dev/ttyACM0" for real device
+  baud_rate: 230400
+  timeout: 5.0
+
 # API server
 server:
   host: "0.0.0.0"
