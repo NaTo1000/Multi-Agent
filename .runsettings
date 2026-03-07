@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- .runsettings — Visual Studio Test Explorer / dotnet test configuration -->
+<!-- See: https://learn.microsoft.com/en-us/visualstudio/test/configure-unit-tests-by-using-a-dot-runsettings-file -->
+<RunSettings>
+  <RunConfiguration>
+    <!-- Timeout per test in milliseconds (30 s) -->
+    <TestSessionTimeout>30000</TestSessionTimeout>
+
+    <!-- Collect code coverage via Coverlet -->
+    <CollectSourceInformation>true</CollectSourceInformation>
+
+    <!-- Results directory relative to the solution root -->
+    <ResultsDirectory>./TestResults</ResultsDirectory>
+  </RunConfiguration>
+
+  <DataCollectionRunSettings>
+    <DataCollectors>
+      <DataCollector friendlyName="Code Coverage"
+                     uri="datacollector://microsoft/CodeCoverage/2.0"
+                     assemblyQualifiedName="Microsoft.VisualStudio.Coverage.DynamicCoverageDataCollector, Microsoft.VisualStudio.TraceCollector, Version=11.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a">
+        <Configuration>
+          <CodeCoverage>
+            <ModulePaths>
+              <Include>
+                <ModulePath>.*MultiAgent\.Core\.dll</ModulePath>
+                <ModulePath>.*MultiAgent\.App\.dll</ModulePath>
+              </Include>
+            </ModulePaths>
+            <UseVerifiableInstrumentation>True</UseVerifiableInstrumentation>
+            <AllowLowIntegrityProcesses>True</AllowLowIntegrityProcesses>
+            <CollectFromChildProcesses>True</CollectFromChildProcesses>
+            <CollectAspDotNet>False</CollectAspDotNet>
+          </CodeCoverage>
+        </Configuration>
+      </DataCollector>
+    </DataCollectors>
+  </DataCollectionRunSettings>
+
+  <xUnit>
+    <!-- Parallel test execution within an assembly -->
+    <MaxParallelThreads>-1</MaxParallelThreads>
+  </xUnit>
+</RunSettings>

@@ -209,10 +209,36 @@ python main.py --mode cli
 
 ---
 
+## Visual Studio 2022 (C# rewrite)
+
+Open `MultiAgent.sln` in Visual Studio 2022 or later; select **Debug** or **Release**;
+press **Ctrl+Shift+B** to build, or run tests via **Test Explorer**.
+
+```bash
+# Restore NuGet packages
+dotnet restore
+
+# Build all projects
+dotnet build MultiAgent.sln
+
+# Run unit tests
+dotnet test MultiAgent.sln
+```
+
+See [`docs/BUILD.md`](docs/BUILD.md) for the full guide.
+
+---
+
 ## Directory Structure
 
 ```
-├── orchestrator/       Core orchestrator engine
+├── MultiAgent.sln      C# solution (Visual Studio 2022+)
+├── src/
+│   ├── MultiAgent.Core/    Core orchestration library (net8.0)
+│   └── MultiAgent.App/     CLI host / entry point (net8.0)
+├── tests/
+│   └── MultiAgent.Tests/   xUnit unit-test project (net8.0)
+├── orchestrator/       Core orchestrator engine (Python)
 ├── agents/             Specialised agents (frequency, modulation, firmware, comms, AI)
 ├── ai/                 AI automation engine and PID frequency lock controller
 ├── comms/              WiFi, BLE, GPS/GNSS host-side managers
