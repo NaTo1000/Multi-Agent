@@ -47,3 +47,12 @@ app/*.jsbundle
 
 # CodeQL
 _codeql_detected_source_root
+
+# .NET build artifacts
+[Bb]in/
+[Oo]bj/
+*.user
+*.suo
+.vs/
+TestResults/
+
