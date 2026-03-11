@@ -1,6 +1,6 @@
 "use client"
 
-import { useCallback, useState } from "react"
+import { useCallback, useState, useEffect } from "react"
 import {
   EmbeddedCheckout,
   EmbeddedCheckoutProvider,
@@ -16,10 +16,12 @@ const stripePromise = loadStripe(
 
 export function Checkout({ productId }: { productId: string }) {
   const [error, setError] = useState<string | null>(null)
+  const [isLoading, setIsLoading] = useState(true)
 
   const fetchClientSecret = useCallback(async () => {
     try {
       setError(null)
+      setIsLoading(true)
       const clientSecret = await startCheckoutSession(productId)
       if (!clientSecret) {
         throw new Error("Failed to create checkout session")
@@ -29,8 +31,15 @@ export function Checkout({ productId }: { productId: string }) {
       const message = err instanceof Error ? err.message : "Something went wrong"
       setError(message)
       throw err
+    } finally {
+      setIsLoading(false)
     }
   }, [productId])
+
+  const handleRetry = () => {
+    setError(null)
+    setIsLoading(true)
+  }
 
   if (error) {
     return (
@@ -43,7 +52,7 @@ export function Checkout({ productId }: { productId: string }) {
         <Button 
           variant="outline" 
           className="mt-4"
-          onClick={() => setError(null)}
+          onClick={handleRetry}
         >
           Try Again
         </Button>
@@ -52,22 +61,13 @@ export function Checkout({ productId }: { productId: string }) {
   }
 
   return (
-    <div id="checkout" className="w-full">
+    <div id="checkout" className="w-full min-h-[400px]">
       <EmbeddedCheckoutProvider
         stripe={stripePromise}
         options={{ fetchClientSecret }}
       >
-        <LoadingFallback />
-        <EmbeddedCheckout />
+        <EmbeddedCheckout className="w-full" />
       </EmbeddedCheckoutProvider>
-    </div>
-  )
-}
-
-function LoadingFallback() {
-  return (
-    <div className="flex items-center justify-center py-12">
-      <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
     </div>
   )
 }
