@@ -24,7 +24,7 @@ export function Footer() {
           </nav>
 
           <p className="text-sm text-muted-foreground">
-            &copy; {new Date().getFullYear()} Multi-Agent. All rights reserved.
+            &copy; 2026 Multi-Agent. All rights reserved.
           </p>
         </div>
       </div>
