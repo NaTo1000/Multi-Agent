@@ -200,18 +200,32 @@ public actor PineappleAPIClient: PineappleAPIClientProtocol {
     }
 }
 
-// MARK: - KeychainHelper stub (PineappleKit re-uses the shared helper from IOSIntegration)
-// In standalone PineappleKit usage, access keychain via UserDefaults as fallback.
+// MARK: - KeychainHelper (PineappleKit standalone Keychain access via Security framework)
+
+import Security
 
 private enum KeychainHelper {
     static let pineappleKeyKey = "multiagent.pineapple_api_key"
+
+    /// Reads a string value from the Keychain for the given key.
     static func read(key: String) -> String? {
-        UserDefaults.standard.string(forKey: key)
+        let query: [CFString: Any] = [
+            kSecClass: kSecClassGenericPassword,
+            kSecAttrAccount: key,
+            kSecReturnData: true,
+            kSecMatchLimit: kSecMatchLimitOne
+        ]
+        var result: AnyObject?
+        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        guard status == errSecSuccess,
+              let data = result as? Data,
+              let value = String(data: data, encoding: .utf8) else {
+            return nil
+        }
+        return value
     }
-    static let shared = KeychainHelper.self
 }
 
 private enum AppConfig {
-    static let shared = AppConfig.self
     static let pineappleHost: String = ProcessInfo.processInfo.environment["PINEAPPLE_HOST"] ?? "172.16.42.1"
 }

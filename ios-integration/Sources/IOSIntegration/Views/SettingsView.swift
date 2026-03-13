@@ -1,3 +1,4 @@
+import Combine
 import SwiftUI
 
 /// Settings form for backend URLs, API token, and Pineapple configuration.
@@ -176,8 +177,6 @@ private extension Bundle {
     var appVersion: String { infoDictionary?["CFBundleShortVersionString"] as? String ?? "—" }
     var appBuild:   String { infoDictionary?["CFBundleVersion"] as? String ?? "—" }
 }
-
-import Combine
 
 #Preview {
     SettingsView()

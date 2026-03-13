@@ -122,11 +122,17 @@ public struct AutomationScript: Sendable {
     }
 
     /// Executes each payload sequentially via the provided API client.
+    /// Respects task cancellation between payloads.
     public func execute(using client: PineappleAPIClient) async throws {
         for payload in payloads {
+            try Task.checkCancellation()
             try await client.executePayload(script: payload.script)
             if delayBetweenPayloadSeconds > 0 {
-                try await Task.sleep(for: .seconds(delayBetweenPayloadSeconds))
+                do {
+                    try await Task.sleep(for: .seconds(delayBetweenPayloadSeconds))
+                } catch is CancellationError {
+                    throw CancellationError()
+                }
             }
         }
     }
