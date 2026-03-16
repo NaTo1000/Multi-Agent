@@ -70,6 +70,14 @@ public enum Endpoints {
     /// `POST /api/v1/assets/sync` — trigger backend sync with Momentum CDN.
     public static let assetsSync = "/api/v1/assets/sync"
 
+    // MARK: - AI Council (backend-proxied)
+
+    /// `POST /api/v1/ai/analyse` — proxy to AI council analysis (optional backend support).
+    public static let aiAnalyse = "/api/v1/ai/analyse"
+
+    /// `GET /api/v1/ai/recommendations` — retrieve cached AI recommendations.
+    public static let aiRecommendations = "/api/v1/ai/recommendations"
+
     // MARK: - WebSocket
 
     /// WebSocket path for live telemetry streaming.

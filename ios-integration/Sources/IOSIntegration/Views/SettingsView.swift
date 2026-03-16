@@ -13,6 +13,7 @@ public struct SettingsView: View {
                 backendSection
                 webSocketSection
                 pineappleSection
+                aiCouncilSection
                 authSection
                 aboutSection
             }
@@ -85,6 +86,39 @@ public struct SettingsView: View {
         }
     }
 
+    private var aiCouncilSection: some View {
+        Section {
+            LabeledContent("HuggingFace Token") {
+                SecureField("hf_…", text: $viewModel.hfToken)
+                    .multilineTextAlignment(.trailing)
+                    .autocorrectionDisabled()
+                    .textInputAutocapitalization(.never)
+            }
+            LabeledContent("HF Model ID") {
+                TextField("mistralai/Mistral-7B-Instruct-v0.3", text: $viewModel.hfModelID)
+                    .multilineTextAlignment(.trailing)
+                    .autocorrectionDisabled()
+                    .textInputAutocapitalization(.never)
+            }
+            LabeledContent("WatsonX API Key") {
+                SecureField("IBM Cloud IAM key", text: $viewModel.watsonXAPIKey)
+                    .multilineTextAlignment(.trailing)
+                    .autocorrectionDisabled()
+                    .textInputAutocapitalization(.never)
+            }
+            LabeledContent("WatsonX Project ID") {
+                TextField("xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx", text: $viewModel.watsonXProjectID)
+                    .multilineTextAlignment(.trailing)
+                    .autocorrectionDisabled()
+                    .textInputAutocapitalization(.never)
+            }
+        } header: {
+            Text("AI Council")
+        } footer: {
+            Text("Credentials are stored securely in the iOS Keychain.")
+        }
+    }
+
     private var authSection: some View {
         Section("Authentication") {
             LabeledContent("API Token") {
@@ -117,6 +151,10 @@ private class SettingsViewModel: ObservableObject {
     @Published var pineappleKey = ""
     @Published var apiToken = ""
     @Published var requestTimeout = "30"
+    @Published var hfToken = ""
+    @Published var hfModelID = ""
+    @Published var watsonXAPIKey = ""
+    @Published var watsonXProjectID = ""
     @Published var didSave = false
     @Published var isDirty = false
 
@@ -129,10 +167,13 @@ private class SettingsViewModel: ObservableObject {
         requestTimeout = String(defaults.double(forKey: "requestTimeout") > 0
                          ? defaults.double(forKey: "requestTimeout")
                          : AppConfig.shared.requestTimeout)
-        apiToken       = KeychainHelper.shared.read(key: KeychainHelper.apiTokenKey) ?? ""
-        pineappleKey   = KeychainHelper.shared.read(key: KeychainHelper.pineappleKeyKey) ?? ""
+        apiToken         = KeychainHelper.shared.read(key: KeychainHelper.apiTokenKey) ?? ""
+        pineappleKey     = KeychainHelper.shared.read(key: KeychainHelper.pineappleKeyKey) ?? ""
+        hfToken          = KeychainHelper.shared.read(key: KeychainHelper.hfTokenKey) ?? ""
+        hfModelID        = defaults.string(forKey: "hfModelID") ?? AIConfig.shared.hfModelID
+        watsonXAPIKey    = KeychainHelper.shared.read(key: KeychainHelper.watsonXAPIKey) ?? ""
+        watsonXProjectID = KeychainHelper.shared.read(key: KeychainHelper.watsonXProjectKey) ?? ""
 
-        // Reset dirty flag after load
         objectWillChange.send()
         isDirty = false
         setupDirtyTracking()
@@ -143,12 +184,22 @@ private class SettingsViewModel: ObservableObject {
         defaults.set(wsURL, forKey: "wsURL")
         defaults.set(pineappleHost, forKey: "pineappleHost")
         defaults.set(Double(requestTimeout) ?? 30, forKey: "requestTimeout")
+        defaults.set(hfModelID, forKey: "hfModelID")
 
         if !apiToken.isEmpty {
             KeychainHelper.shared.store(key: KeychainHelper.apiTokenKey, value: apiToken)
         }
         if !pineappleKey.isEmpty {
             KeychainHelper.shared.store(key: KeychainHelper.pineappleKeyKey, value: pineappleKey)
+        }
+        if !hfToken.isEmpty {
+            KeychainHelper.shared.store(key: KeychainHelper.hfTokenKey, value: hfToken)
+        }
+        if !watsonXAPIKey.isEmpty {
+            KeychainHelper.shared.store(key: KeychainHelper.watsonXAPIKey, value: watsonXAPIKey)
+        }
+        if !watsonXProjectID.isEmpty {
+            KeychainHelper.shared.store(key: KeychainHelper.watsonXProjectKey, value: watsonXProjectID)
         }
 
         isDirty = false
@@ -161,11 +212,15 @@ private class SettingsViewModel: ObservableObject {
     }
 
     private func setupDirtyTracking() {
-        $baseURL.dropFirst().sink { [weak self] _ in self?.isDirty = true }.store(in: &cancellables)
-        $wsURL.dropFirst().sink { [weak self] _ in self?.isDirty = true }.store(in: &cancellables)
-        $pineappleHost.dropFirst().sink { [weak self] _ in self?.isDirty = true }.store(in: &cancellables)
-        $apiToken.dropFirst().sink { [weak self] _ in self?.isDirty = true }.store(in: &cancellables)
-        $requestTimeout.dropFirst().sink { [weak self] _ in self?.isDirty = true }.store(in: &cancellables)
+        $baseURL.dropFirst().sink          { [weak self] _ in self?.isDirty = true }.store(in: &cancellables)
+        $wsURL.dropFirst().sink            { [weak self] _ in self?.isDirty = true }.store(in: &cancellables)
+        $pineappleHost.dropFirst().sink    { [weak self] _ in self?.isDirty = true }.store(in: &cancellables)
+        $apiToken.dropFirst().sink         { [weak self] _ in self?.isDirty = true }.store(in: &cancellables)
+        $requestTimeout.dropFirst().sink   { [weak self] _ in self?.isDirty = true }.store(in: &cancellables)
+        $hfToken.dropFirst().sink          { [weak self] _ in self?.isDirty = true }.store(in: &cancellables)
+        $hfModelID.dropFirst().sink        { [weak self] _ in self?.isDirty = true }.store(in: &cancellables)
+        $watsonXAPIKey.dropFirst().sink    { [weak self] _ in self?.isDirty = true }.store(in: &cancellables)
+        $watsonXProjectID.dropFirst().sink { [weak self] _ in self?.isDirty = true }.store(in: &cancellables)
     }
 
     private var cancellables = Set<AnyCancellable>()

@@ -36,4 +36,7 @@ public enum AppLogger {
 
     /// Security / Keychain events.
     public static let security   = Logger(subsystem: subsystem, category: "security")
+
+    /// AI Council — HuggingFace and WatsonX inference events.
+    public static let ai         = Logger(subsystem: subsystem, category: "ai")
 }

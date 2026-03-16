@@ -220,4 +220,160 @@ final class ModelDecodingTests: XCTestCase {
         XCTAssertEqual(device.sdCardFree, 2048000)
         XCTAssertTrue(device.isConnected)
     }
+
+    // MARK: - PineappleDevice
+
+    func testPineappleDeviceDecoding() throws {
+        let json = """
+        {
+            "id": "pine-01",
+            "host": "172.16.42.1",
+            "api_key": "testkey",
+            "modules": ["PineAP", "Recon"],
+            "recon_data": []
+        }
+        """.data(using: .utf8)!
+
+        let device = try decoder.decode(PineappleDevice.self, from: json)
+        XCTAssertEqual(device.host, "172.16.42.1")
+        XCTAssertEqual(device.modules, ["PineAP", "Recon"])
+        XCTAssertTrue(device.reconData.isEmpty)
+    }
+
+    func testPineappleDeviceMinimalDecoding() throws {
+        let json = """
+        {"id": "p1", "host": "10.0.0.1", "api_key": "", "modules": [], "recon_data": []}
+        """.data(using: .utf8)!
+        let device = try decoder.decode(PineappleDevice.self, from: json)
+        XCTAssertEqual(device.host, "10.0.0.1")
+        XCTAssertTrue(device.modules.isEmpty)
+    }
+
+    // MARK: - Device status helpers
+
+    func testDeviceOnlineStatus() {
+        let device = Device(id: "d1", name: "Test", status: .online, capabilities: [])
+        XCTAssertTrue(device.status == .online)
+    }
+
+    func testDeviceCapabilities() {
+        let device = Device(id: "d1", name: "Test", status: .online, capabilities: ["wifi", "ble", "gpio"])
+        XCTAssertEqual(device.capabilities.count, 3)
+        XCTAssertTrue(device.capabilities.contains("ble"))
+    }
+
+    // MARK: - TelemetryData init
+
+    func testTelemetryDataInit() {
+        let ts = Date()
+        let frame = TelemetryData(timestamp: ts, deviceId: "d1", metrics: ["temp": 25.5])
+        XCTAssertEqual(frame.deviceId, "d1")
+        XCTAssertEqual(frame.metrics["temp"], 25.5, accuracy: 0.001)
+        XCTAssertNil(frame.signalStrength)
+    }
+
+    // MARK: - NetworkScan EncryptionType raw values
+
+    func testEncryptionTypeRawValues() {
+        XCTAssertEqual(NetworkScan.EncryptionType(rawValue: "WPA2"), .wpa2)
+        XCTAssertEqual(NetworkScan.EncryptionType(rawValue: "WPA3"), .wpa3)
+        XCTAssertEqual(NetworkScan.EncryptionType(rawValue: "WEP"), .wep)
+        XCTAssertEqual(NetworkScan.EncryptionType(rawValue: "Open"), .open)
+        XCTAssertEqual(NetworkScan.EncryptionType(rawValue: "Unknown"), .unknown)
+    }
+
+    func testNetworkScanExcellentSignal() {
+        let scan = NetworkScan(ssid: "X", bssid: "00:00:00:00:00:01", channel: 6, signal: -35)
+        XCTAssertEqual(scan.signalLabel, "Excellent")
+    }
+
+    func testNetworkScanNoSignal() {
+        let scan = NetworkScan(ssid: "X", bssid: "00:00:00:00:00:01", channel: 6, signal: -95)
+        XCTAssertEqual(scan.signalLabel, "No Signal")
+    }
+
+    // MARK: - FirmwareRelease optional file size
+
+    func testFirmwareReleaseOptionalFileSize() throws {
+        let json = """
+        {
+            "id": "fw-002",
+            "version": "3.0.0",
+            "url": "https://example.com/fw.bin",
+            "sha256": "abc123",
+            "changelog": "New features",
+            "release_date": "2024-06-01T00:00:00Z"
+        }
+        """.data(using: .utf8)!
+        let release = try decoder.decode(FirmwareRelease.self, from: json)
+        XCTAssertNil(release.fileSize)
+    }
+
+    // MARK: - AssetPack animations
+
+    func testAssetPackWithAnimations() throws {
+        let json = """
+        {
+            "id": "pack-002",
+            "name": "Flipper Pack",
+            "author": "dev",
+            "description": "Cool animations",
+            "source_url": "https://example.com",
+            "previews": [],
+            "meta_version": 2,
+            "animations": [
+                {
+                    "name": "Wave",
+                    "width": 128,
+                    "height": 64,
+                    "frame_count": 8,
+                    "frame_rate": 4,
+                    "passive_frames": [0,1,2,3],
+                    "active_frames": [4,5,6,7]
+                }
+            ]
+        }
+        """.data(using: .utf8)!
+
+        let pack = try decoder.decode(AssetPack.self, from: json)
+        XCTAssertEqual(pack.animations.count, 1)
+        XCTAssertEqual(pack.animations[0].name, "Wave")
+        XCTAssertEqual(pack.animations[0].frameCount, 8)
+        XCTAssertEqual(pack.animations[0].duration, 2.0, accuracy: 0.001)
+    }
+
+    // MARK: - JSON round-trip tests
+
+    func testDeviceJSONRoundTrip() throws {
+        let original = Device(
+            id: "rt-01",
+            name: "Round Trip",
+            status: .busy,
+            capabilities: ["wifi"]
+        )
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        let data = try encoder.encode(original)
+        let decoded = try decoder.decode(Device.self, from: data)
+        XCTAssertEqual(decoded.id, original.id)
+        XCTAssertEqual(decoded.status, original.status)
+    }
+
+    func testTelemetryDataJSONRoundTrip() throws {
+        let original = TelemetryData(
+            timestamp: Date(timeIntervalSince1970: 1_700_000_000),
+            deviceId: "rt-02",
+            metrics: ["cpu": 55.0, "temp": 38.2],
+            signalStrength: -70,
+            eventType: "sample"
+        )
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        let data = try encoder.encode(original)
+        let decoded = try decoder.decode(TelemetryData.self, from: data)
+        XCTAssertEqual(decoded.deviceId, original.deviceId)
+        XCTAssertEqual(decoded.metrics["cpu"], original.metrics["cpu"], accuracy: 0.001)
+        XCTAssertEqual(decoded.signalStrength, original.signalStrength)
+    }
 }
+

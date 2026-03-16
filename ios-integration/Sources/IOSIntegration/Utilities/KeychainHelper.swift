@@ -9,8 +9,11 @@ public final class KeychainHelper: @unchecked Sendable {
 
     // MARK: - Well-known keys
 
-    public static let apiTokenKey      = "multiagent.api_token"
-    public static let pineappleKeyKey  = "multiagent.pineapple_api_key"
+    public static let apiTokenKey        = "multiagent.api_token"
+    public static let pineappleKeyKey    = "multiagent.pineapple_api_key"
+    public static let hfTokenKey         = "multiagent.hf_api_token"
+    public static let watsonXAPIKey      = "multiagent.watsonx_api_key"
+    public static let watsonXProjectKey  = "multiagent.watsonx_project_id"
 
     // MARK: - Private
 

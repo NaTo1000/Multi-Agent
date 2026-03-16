@@ -139,4 +139,98 @@ final class OrchestratorServiceTests: XCTestCase {
         XCTAssertEqual(dict["firmware_id"] as? String, "fw-v2")
         XCTAssertEqual((dict["device_ids"] as? [String])?.count, 3)
     }
+
+    // MARK: - AppConfig
+
+    func testAppConfigDefaultBaseURL() {
+        let cfg = AppConfig()
+        XCTAssertEqual(cfg.baseURL.scheme, "http")
+        XCTAssertNotNil(cfg.baseURL.host)
+    }
+
+    func testAppConfigDefaultWebSocketURL() {
+        let cfg = AppConfig()
+        XCTAssertTrue(cfg.webSocketURL.absoluteString.hasPrefix("ws://"))
+    }
+
+    func testAppConfigDefaultTimeouts() {
+        let cfg = AppConfig()
+        XCTAssertGreaterThan(cfg.requestTimeout, 0)
+        XCTAssertGreaterThan(cfg.retryMaxAttempts, 0)
+        XCTAssertGreaterThan(cfg.retryBaseDelay, 0)
+    }
+
+    func testAppConfigApiURLBuilding() {
+        let cfg = AppConfig()
+        let url = cfg.apiURL(path: "/api/v1/status")
+        XCTAssertTrue(url.absoluteString.contains("status"))
+    }
+
+    func testAppConfigMakeSession() {
+        let cfg = AppConfig()
+        let session = cfg.makeSession()
+        XCTAssertNotNil(session)
+        XCTAssertEqual(
+            session.configuration.timeoutIntervalForRequest,
+            cfg.requestTimeout,
+            accuracy: 0.1
+        )
+    }
+
+    // MARK: - Endpoints constants
+
+    func testEndpointsAreNonEmpty() {
+        XCTAssertFalse(Endpoints.status.isEmpty)
+        XCTAssertFalse(Endpoints.devices.isEmpty)
+        XCTAssertFalse(Endpoints.agents.isEmpty)
+        XCTAssertFalse(Endpoints.tasks.isEmpty)
+        XCTAssertFalse(Endpoints.firmwareBuilds.isEmpty)
+        XCTAssertFalse(Endpoints.wsTelemetry.isEmpty)
+    }
+
+    func testEndpointsDynamicPaths() {
+        XCTAssertTrue(Endpoints.device(id: "abc").contains("abc"))
+        XCTAssertTrue(Endpoints.deviceTelemetry(id: "xyz").contains("xyz"))
+        XCTAssertTrue(Endpoints.agent(id: "agent-1").contains("agent-1"))
+        XCTAssertTrue(Endpoints.task(id: "t-99").contains("t-99"))
+        XCTAssertTrue(Endpoints.firmwareBuild(version: "2.0").contains("2.0"))
+    }
+
+    func testEndpointsURLBuilder() {
+        let url = Endpoints.url(for: Endpoints.status)
+        XCTAssertTrue(url.absoluteString.contains("status"))
+    }
+
+    // MARK: - TaskStatus raw values
+
+    func testTaskStatusRawValues() {
+        XCTAssertEqual(TaskResponse.TaskStatus(rawValue: "queued"),    .queued)
+        XCTAssertEqual(TaskResponse.TaskStatus(rawValue: "running"),   .running)
+        XCTAssertEqual(TaskResponse.TaskStatus(rawValue: "completed"), .completed)
+        XCTAssertEqual(TaskResponse.TaskStatus(rawValue: "failed"),    .failed)
+        XCTAssertEqual(TaskResponse.TaskStatus(rawValue: "cancelled"), .cancelled)
+    }
+
+    // MARK: - DeviceCreate
+
+    func testDeviceCreateMinimalEncoding() throws {
+        let create = DeviceCreate(name: "Minimal", capabilities: [])
+        let data = try JSONEncoder().encode(create)
+        let dict = try JSONSerialization.jsonObject(with: data) as! [String: Any]
+        XCTAssertEqual(dict["name"] as? String, "Minimal")
+    }
+
+    func testDeviceCreateWithAllFields() throws {
+        let create = DeviceCreate(
+            name: "Full Node",
+            ipAddress: "192.168.0.5",
+            macAddress: "DE:AD:BE:EF:00:01",
+            capabilities: ["wifi", "ble", "gpio", "adc"]
+        )
+        let data = try JSONEncoder().encode(create)
+        let dict = try JSONSerialization.jsonObject(with: data) as! [String: Any]
+        XCTAssertEqual(dict["ip_address"] as? String, "192.168.0.5")
+        XCTAssertEqual((dict["capabilities"] as? [String])?.count, 4)
+    }
 }
+

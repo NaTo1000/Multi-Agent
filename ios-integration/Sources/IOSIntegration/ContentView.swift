@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// Root navigation container that routes to the five main tabs.
+/// Root navigation container that routes to the six main tabs.
 public struct ContentView: View {
     @EnvironmentObject private var orchestratorEnv: OrchestratorServiceEnv
     @EnvironmentObject private var socketEnv: TelemetrySocketEnv
@@ -17,6 +17,11 @@ public struct ContentView: View {
             DeviceListView()
                 .tabItem {
                     Label("Devices", systemImage: "cpu.fill")
+                }
+
+            AICouncilView()
+                .tabItem {
+                    Label("AI Council", systemImage: "brain.head.profile")
                 }
 
             FlipperView()

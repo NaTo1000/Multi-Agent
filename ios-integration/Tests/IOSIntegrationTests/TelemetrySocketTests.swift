@@ -89,4 +89,88 @@ final class TelemetrySocketTests: XCTestCase {
         let state = await socket.state
         XCTAssertEqual(state, .disconnected)
     }
+
+    // MARK: - Multiple concurrent streams
+
+    func testMultipleTelemetryStreamsCanBeCreated() async {
+        let socket = TelemetrySocket()
+        let stream1 = await socket.telemetryStream()
+        let stream2 = await socket.telemetryStream()
+        // Both streams should be created without crashing
+        XCTAssertNotNil(stream1)
+        XCTAssertNotNil(stream2)
+    }
+
+    func testMultipleStateStreamsCanBeCreated() async {
+        let socket = TelemetrySocket()
+        let s1 = await socket.stateStream()
+        let s2 = await socket.stateStream()
+        XCTAssertNotNil(s1)
+        XCTAssertNotNil(s2)
+    }
+
+    // MARK: - TelemetrySocketState transitions
+
+    func testAllSocketStatesRepresentable() {
+        let states: [TelemetrySocketState] = [
+            .disconnected, .connecting, .connected,
+            .reconnecting(attempt: 1), .failed(message: "timeout")
+        ]
+        for state in states {
+            // Ensure equality checks work for all states
+            let copy = state
+            XCTAssertEqual(copy, state)
+        }
+    }
+
+    func testSocketStateInequalityAcrossTypes() {
+        XCTAssertNotEqual(TelemetrySocketState.connected, .disconnected)
+        XCTAssertNotEqual(TelemetrySocketState.connecting, .connected)
+        XCTAssertNotEqual(TelemetrySocketState.reconnecting(attempt: 1), .connected)
+    }
+
+    // MARK: - TelemetryData edge cases
+
+    func testTelemetryDataLargeMetricsDictionary() throws {
+        var metrics: [String: Double] = [:]
+        for i in 0..<50 {
+            metrics["metric_\(i)"] = Double(i) * 1.5
+        }
+        let frame = TelemetryData(timestamp: Date(), deviceId: "esp-x", metrics: metrics)
+        XCTAssertEqual(frame.metrics.count, 50)
+        XCTAssertEqual(frame.metrics["metric_0"], 0.0, accuracy: 0.001)
+        XCTAssertEqual(frame.metrics["metric_49"], 73.5, accuracy: 0.001)
+    }
+
+    func testTelemetryDataNegativeSignalStrength() {
+        let frame = TelemetryData(
+            timestamp: Date(),
+            deviceId: "esp-01",
+            metrics: [:],
+            signalStrength: -100
+        )
+        XCTAssertEqual(frame.signalStrength, -100)
+    }
+
+    // MARK: - Malformed JSON resilience
+
+    func testMalformedTelemetryJSONDoesNotCrash() throws {
+        // Ensure our decoder is resilient to partial data
+        let badJSON = """
+        {"timestamp": "not-a-date", "device_id": "d1", "metrics": {}}
+        """.data(using: .utf8)!
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        XCTAssertThrowsError(try decoder.decode(TelemetryData.self, from: badJSON))
+    }
+
+    func testEmptyMetricsDecodedCorrectly() throws {
+        let json = """
+        {"timestamp": "2024-01-15T10:00:00Z", "device_id": "d1", "metrics": {}}
+        """.data(using: .utf8)!
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let frame = try decoder.decode(TelemetryData.self, from: json)
+        XCTAssertTrue(frame.metrics.isEmpty)
+    }
 }
