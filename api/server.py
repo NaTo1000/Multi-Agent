@@ -47,7 +47,19 @@ def create_app(orchestrator=None):
         """Modern lifespan handler replacing deprecated @app.on_event."""
         await orchestrator.start()
         logger.info("Orchestrator started via lifespan startup")
+
+        # Start the automation engine if attached
+        if hasattr(orchestrator, "automation_engine") and orchestrator.automation_engine:
+            await orchestrator.automation_engine.start()
+            logger.info("AutomationEngine started via lifespan startup")
+
         yield
+
+        # Stop automation engine
+        if hasattr(orchestrator, "automation_engine") and orchestrator.automation_engine:
+            await orchestrator.automation_engine.stop()
+            logger.info("AutomationEngine stopped via lifespan shutdown")
+
         await orchestrator.stop()
         logger.info("Orchestrator stopped via lifespan shutdown")
 
@@ -62,12 +74,11 @@ def create_app(orchestrator=None):
         lifespan=lifespan,
     )
 
-    # CORS -- configurable via environment variable, defaults to restrictive
+    # CORS -- configurable via CORS_ORIGINS env var
     allowed_origins = os.environ.get("CORS_ORIGINS", "").strip()
     if allowed_origins:
         origins = [o.strip() for o in allowed_origins.split(",") if o.strip()]
     else:
-        # Default: allow all in development (override for production)
         origins = ["*"]
 
     app.add_middleware(
@@ -77,6 +88,19 @@ def create_app(orchestrator=None):
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+    # Rate limiting middleware
+    from .middleware import RateLimitMiddleware
+    max_req = int(os.environ.get("RATE_LIMIT_MAX", "100"))
+    rate_window = int(os.environ.get("RATE_LIMIT_WINDOW", "60"))
+    app.add_middleware(RateLimitMiddleware, max_requests=max_req, window_seconds=rate_window)
+
+    # API key auth middleware (if API_KEY env var is set)
+    api_key = os.environ.get("API_KEY", "").strip()
+    if api_key:
+        from .middleware import APIKeyMiddleware
+        app.add_middleware(APIKeyMiddleware, api_key=api_key)
+        logger.info("API key authentication enabled")
 
     # Attach the orchestrator to app state
     app.state.orchestrator = orchestrator

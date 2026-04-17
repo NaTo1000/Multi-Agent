@@ -22,13 +22,17 @@ class AutomationPolicy:
     def __init__(
         self,
         name: str,
-        action: str,
+        action: Optional[str] = None,
         params: Optional[Dict[str, Any]] = None,
-        interval_sec: int = 60,
+        interval_sec: float = 60,
         enabled: bool = True,
+        agent_type: str = "ai_agent",
+        task: Optional[str] = None,
     ):
         self.name = name
-        self.action = action
+        # ``task`` and ``action`` are interchangeable; ``task`` takes precedence
+        self.action = task or action or name
+        self.agent_type = agent_type
         self.params = params or {}
         self.interval_sec = interval_sec
         self.enabled = enabled
@@ -81,6 +85,7 @@ class AutomationEngine:
             {
                 "name": p.name,
                 "action": p.action,
+                "agent_type": p.agent_type,
                 "interval_sec": p.interval_sec,
                 "enabled": p.enabled,
                 "last_run": p.last_run,
@@ -132,13 +137,13 @@ class AutomationEngine:
             await asyncio.sleep(1)
 
     async def _run_policy(self, policy: AutomationPolicy) -> None:
-        """Execute a single automation policy against all AI agents."""
-        ai_agents = self.orchestrator.get_agents_by_type("ai_agent")
-        if not ai_agents:
+        """Execute a single automation policy against agents of the configured type."""
+        agents = self.orchestrator.get_agents_by_type(policy.agent_type)
+        if not agents:
             return
         try:
             task_id = await self.orchestrator.dispatch_task(
-                ai_agents[0].agent_id,
+                agents[0].agent_id,
                 policy.action,
                 policy.params,
             )

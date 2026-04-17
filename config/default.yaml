@@ -1,4 +1,4 @@
-# Multi-Agent ESP32 Orchestration System
+# Multi-Agent ESP32 Orchestration System v2.0
 
 # Core settings
 health_check_interval: 10       # seconds between device health-checks
@@ -26,12 +26,33 @@ comms_agent:
 
 # AI agent
 ai_agent:
-  ai_research_endpoint: ""       # Optional LLM/cloud AI endpoint
+  ai_research_endpoint: ""        # Optional legacy HTTP AI endpoint
+  groq_model: "llama-3.3-70b-versatile"  # Groq model for AI research
+  ai_enabled: true                # Enable LLM-powered AI features
+
+# Automation engine
+automation:
+  enabled: true
+  policies:
+    - name: "interference_check"
+      action: "detect_interference"
+      interval_sec: 30
+    - name: "fleet_optimise"
+      action: "auto_tune_fleet"
+      interval_sec: 120
+    - name: "anomaly_scan"
+      action: "anomaly_detect"
+      interval_sec: 15
 
 # API server
 server:
   host: "0.0.0.0"
   port: 8000
+
+# Rate limiting
+rate_limit:
+  max_requests: 100
+  window_seconds: 60
 
 # Logging
 logging:

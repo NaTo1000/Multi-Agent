@@ -1,5 +1,5 @@
 """
-Multi-Agent ESP32 Orchestration System — main entry point.
+Multi-Agent ESP32 Orchestration System -- main entry point.
 
 Usage:
     python main.py                    # Run API server (default)
@@ -11,6 +11,7 @@ Usage:
 import argparse
 import asyncio
 import logging
+import os
 import sys
 from pathlib import Path
 
@@ -19,8 +20,20 @@ from logging_system.logger import setup_logging
 logger = logging.getLogger(__name__)
 
 
+def _load_dotenv() -> None:
+    """Load .env file if python-dotenv is installed."""
+    try:
+        from dotenv import load_dotenv
+        env_file = Path(__file__).parent / ".env"
+        if env_file.exists():
+            load_dotenv(env_file)
+            logger.info("Loaded environment from %s", env_file)
+    except ImportError:
+        pass
+
+
 def build_orchestrator(config: dict):
-    """Instantiate and wire up the full orchestrator."""
+    """Instantiate and wire up the full orchestrator with automation engine."""
     from orchestrator import Orchestrator
     from agents import (
         AIAgent,
@@ -29,6 +42,7 @@ def build_orchestrator(config: dict):
         FrequencyAgent,
         ModulationAgent,
     )
+    from ai.automation import AutomationEngine
 
     orch = Orchestrator(config)
 
@@ -38,6 +52,10 @@ def build_orchestrator(config: dict):
     orch.register_agent(FirmwareAgent(config.get("firmware_agent", {})))
     orch.register_agent(CommsAgent(config.get("comms_agent", {})))
     orch.register_agent(AIAgent(config.get("ai_agent", {})))
+
+    # Create and attach the automation engine
+    automation = AutomationEngine(orch)
+    orch.automation_engine = automation
 
     return orch
 
@@ -49,10 +67,10 @@ def load_config(config_path: str) -> dict:
         with open(config_path, encoding="utf-8") as f:
             return yaml.safe_load(f) or {}
     except FileNotFoundError:
-        logger.info("Config file not found at %s — using defaults", config_path)
+        logger.info("Config file not found at %s -- using defaults", config_path)
         return {}
     except ImportError:
-        logger.warning("PyYAML not installed — using defaults")
+        logger.warning("PyYAML not installed -- using defaults")
         return {}
 
 
@@ -105,7 +123,7 @@ async def run_demo(orchestrator):
     orchestrator.register_device(device)
     print(f"  Registered device: {device.name} ({device.device_id})")
 
-    # Start orchestrator
+    # Start orchestrator (also starts automation engine)
     await orchestrator.start()
     print("  Orchestrator started")
     print(f"  Agents: {[a.agent_type for a in orchestrator.list_agents()]}")
@@ -127,7 +145,7 @@ async def run_demo(orchestrator):
             device.device_id,
         )
         result = orchestrator.get_task_result(task_id)
-        print(f"\n  FrequencyAgent get_frequency → {result}")
+        print(f"\n  FrequencyAgent get_frequency -> {result}")
 
     # Demo: AI recommendation
     ai_agents = orchestrator.get_agents_by_type("ai_agent")
@@ -159,7 +177,7 @@ async def run_demo(orchestrator):
             print(f"    compiled:  {build_info.get('compiled')}")
 
     await orchestrator.stop()
-    print("\n  Orchestrator stopped — demo complete.\n")
+    print("\n  Orchestrator stopped -- demo complete.\n")
 
 
 # ------------------------------------------------------------------
@@ -185,6 +203,7 @@ async def run_cli(orchestrator):
             print("  status         - Show orchestrator status")
             print("  devices        - List registered devices")
             print("  agents         - List registered agents")
+            print("  automation     - Show automation policies")
             continue
         if line == "status":
             import json
@@ -195,6 +214,13 @@ async def run_cli(orchestrator):
         elif line == "agents":
             for a in orchestrator.list_agents():
                 print(f"  {a.agent_id[:8]}: {a.agent_type} [{a.status.value}]")
+        elif line == "automation":
+            if hasattr(orchestrator, "automation_engine"):
+                policies = orchestrator.automation_engine.list_policies()
+                for p in policies:
+                    print(f"  {p['name']}: enabled={p['enabled']} interval={p['interval_sec']}s")
+            else:
+                print("  Automation engine not configured")
         else:
             print(f"  Unknown command: {line}")
 
@@ -206,6 +232,8 @@ async def run_cli(orchestrator):
 # ------------------------------------------------------------------
 
 def main():
+    _load_dotenv()
+
     parser = argparse.ArgumentParser(
         description="Multi-Agent ESP32 Orchestration System"
     )
