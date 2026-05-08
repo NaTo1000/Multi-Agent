@@ -2,10 +2,15 @@ import { NextRequest, NextResponse } from "next/server"
 import { validateSession } from "@/lib/admin/auth"
 import { logEvent, clearEvents, getEventStats } from "@/lib/admin/engine"
 import { clearResolvedErrors, getErrorStats, setSelfRepair, getSelfRepairStatus } from "@/lib/admin/errors"
-import { createSnapshot, getSnapshots, getSnapshotStats } from "@/lib/admin/mirror"
+import { createSnapshot, getSnapshots } from "@/lib/admin/mirror"
 import { getSystemMetrics } from "@/lib/admin/metrics"
 import { recordAudit, getAuditStats } from "@/lib/admin/audit"
 import { getActiveSessionCount } from "@/lib/admin/auth"
+import { pipelineEngine } from "@/lib/admin/pipeline"
+import { configEngine } from "@/lib/admin/config"
+import { healthEngine } from "@/lib/admin/health"
+import { schedulerEngine } from "@/lib/admin/scheduler"
+import { webhookEngine } from "@/lib/admin/webhook"
 
 function checkAuth(request: NextRequest): boolean {
   const token = request.cookies.get("admin_session")?.value
@@ -46,6 +51,19 @@ function executeCommand(command: string): CommandResult {
       output.push("  version                 - Show system version")
       output.push("  clear                   - Clear terminal")
       output.push("  ping                    - Test system responsiveness")
+      output.push("")
+      output.push("Builder Engine commands:")
+      output.push("  pipelines               - List all pipelines")
+      output.push("  pipeline run <id>       - Run a pipeline")
+      output.push("  config list             - List all config keys")
+      output.push("  config get <key>        - Get config value")
+      output.push("  config set <key> <val>  - Set config value")
+      output.push("  health                  - Run all health checks")
+      output.push("  health status           - Show health summary")
+      output.push("  jobs                    - List scheduled jobs")
+      output.push("  job run <id>            - Trigger a job")
+      output.push("  webhooks                - List all webhooks")
+      output.push("  webhook test <id>       - Test a webhook")
       break
 
     case "status": {
@@ -180,6 +198,133 @@ function executeCommand(command: string): CommandResult {
     case "clear":
       output.push("__CLEAR__")
       break
+
+    case "pipelines": {
+      const pipes = pipelineEngine.getAllPipelines()
+      if (pipes.length === 0) {
+        output.push("No pipelines defined")
+      } else {
+        output.push(`=== PIPELINES (${pipes.length}) ===`)
+        for (const p of pipes) {
+          output.push(`  ${p.id} | ${p.name} | ${p.status} | ${p.steps.length} steps | ${p.runCount} runs`)
+        }
+      }
+      break
+    }
+
+    case "pipeline": {
+      if (args[0] === "run" && args[1]) {
+        const result = pipelineEngine.execute(args[1])
+        if (result) {
+          output.push(`Pipeline ${args[1]} started`)
+          output.push(`Status: ${result.status}`)
+        } else {
+          status = "error"
+          output.push(`Pipeline ${args[1]} not found`)
+        }
+      } else {
+        output.push("Usage: pipeline run <id>")
+      }
+      break
+    }
+
+    case "config": {
+      if (args[0] === "list") {
+        const configs = configEngine.getAllConfigs()
+        if (configs.length === 0) {
+          output.push("No configs defined")
+        } else {
+          output.push(`=== CONFIGS (${configs.length}) ===`)
+          for (const c of configs) {
+            const val = c.type === "secret" ? "********" : String(c.value)
+            output.push(`  ${c.key} = ${val} (${c.type})`)
+          }
+        }
+      } else if (args[0] === "get" && args[1]) {
+        const val = configEngine.get(args[1])
+        if (val !== undefined) {
+          output.push(`${args[1]} = ${JSON.stringify(val)}`)
+        } else {
+          output.push(`Config key '${args[1]}' not found`)
+        }
+      } else if (args[0] === "set" && args[1] && args[2]) {
+        configEngine.set(args[1], args.slice(2).join(" "), "admin")
+        output.push(`Set ${args[1]} = ${args.slice(2).join(" ")}`)
+      } else {
+        output.push("Usage: config list | config get <key> | config set <key> <value>")
+      }
+      break
+    }
+
+    case "health": {
+      if (args[0] === "status") {
+        const summary = healthEngine.getSummary()
+        output.push("=== HEALTH SUMMARY ===")
+        output.push(`Healthy: ${summary.healthy} | Degraded: ${summary.degraded} | Unhealthy: ${summary.unhealthy} | Unknown: ${summary.unknown}`)
+      } else {
+        output.push("Running all health checks...")
+        const checks = healthEngine.getAllChecks()
+        for (const check of checks) {
+          if (check.enabled) {
+            healthEngine.runCheck(check.id)
+            output.push(`  ${check.name}: ${check.lastStatus}`)
+          }
+        }
+      }
+      break
+    }
+
+    case "jobs": {
+      const jobs = schedulerEngine.getAllJobs()
+      if (jobs.length === 0) {
+        output.push("No scheduled jobs")
+      } else {
+        output.push(`=== SCHEDULED JOBS (${jobs.length}) ===`)
+        for (const j of jobs) {
+          const status = j.enabled ? "ACTIVE" : "PAUSED"
+          output.push(`  ${j.id} | ${j.name} | ${j.schedule} | ${status} | ${j.runCount} runs`)
+        }
+      }
+      break
+    }
+
+    case "job": {
+      if (args[0] === "run" && args[1]) {
+        schedulerEngine.triggerJob(args[1]).then((result) => {
+          // Result handled async
+        })
+        output.push(`Triggered job ${args[1]}`)
+      } else {
+        output.push("Usage: job run <id>")
+      }
+      break
+    }
+
+    case "webhooks": {
+      const hooks = webhookEngine.getAllWebhooks()
+      if (hooks.length === 0) {
+        output.push("No webhooks configured")
+      } else {
+        output.push(`=== WEBHOOKS (${hooks.length}) ===`)
+        for (const w of hooks) {
+          const status = w.enabled ? "ACTIVE" : "PAUSED"
+          output.push(`  ${w.id} | ${w.name} | ${status} | ${w.events.join(",")}`)
+        }
+      }
+      break
+    }
+
+    case "webhook": {
+      if (args[0] === "test" && args[1]) {
+        webhookEngine.testWebhook(args[1]).then((result) => {
+          // Result handled async
+        })
+        output.push(`Testing webhook ${args[1]}...`)
+      } else {
+        output.push("Usage: webhook test <id>")
+      }
+      break
+    }
 
     default:
       status = "error"
