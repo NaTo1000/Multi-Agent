@@ -26,11 +26,14 @@ export function Header() {
           <Link href="#" className="text-sm text-muted-foreground transition-colors hover:text-foreground">
             Docs
           </Link>
+          <Link href="/admin" className="text-sm text-muted-foreground transition-colors hover:text-foreground">
+            Admin
+          </Link>
         </nav>
 
         <div className="hidden items-center gap-4 sm:flex">
-          <Button variant="ghost" size="sm">
-            Sign in
+          <Button variant="ghost" size="sm" asChild>
+            <Link href="/admin">Admin</Link>
           </Button>
           <Button size="sm" asChild>
             <Link href="#pricing">Get Started</Link>
