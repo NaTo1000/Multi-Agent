@@ -7,6 +7,7 @@ from .core import Orchestrator
 from .agent import AgentBase, AgentStatus
 from .device import ESP32Device, DeviceStatus
 from .scheduler import TaskScheduler
+from .router import TaskRouter
 
 __all__ = [
     "Orchestrator",
@@ -15,4 +16,5 @@ __all__ = [
     "ESP32Device",
     "DeviceStatus",
     "TaskScheduler",
+    "TaskRouter",
 ]

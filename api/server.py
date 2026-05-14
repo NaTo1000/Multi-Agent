@@ -55,17 +55,27 @@ def create_app(orchestrator=None):
         orchestrator = Orchestrator()
     app.state.orchestrator = orchestrator
 
+    # Attach AutomationEngine and TelemetryMonitor to app state
+    from ai.automation import AutomationEngine
+    from logging_system.monitor import TelemetryMonitor
+    app.state.automation = AutomationEngine(orchestrator)
+    app.state.monitor = TelemetryMonitor(orchestrator)
+
     # Register startup / shutdown hooks
     @app.on_event("startup")
     async def _startup():
         import asyncio
         asyncio.ensure_future(orchestrator.start())
-        logger.info("Orchestrator started via API startup hook")
+        asyncio.ensure_future(app.state.automation.start())
+        asyncio.ensure_future(app.state.monitor.start())
+        logger.info("Orchestrator, AutomationEngine, and TelemetryMonitor started")
 
     @app.on_event("shutdown")
     async def _shutdown():
         await orchestrator.stop()
-        logger.info("Orchestrator stopped via API shutdown hook")
+        await app.state.automation.stop()
+        await app.state.monitor.stop()
+        logger.info("Orchestrator, AutomationEngine, and TelemetryMonitor stopped")
 
     # Mount routers
     app.include_router(build_router(), prefix="/api/v1")

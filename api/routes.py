@@ -210,4 +210,59 @@ def build_router():
         )
         return request.app.state.orchestrator.get_task_result(task_id)
 
+    # ------------------------------------------------------------------
+    # Routing (intelligent agent selection)
+    # ------------------------------------------------------------------
+
+    class RouteTaskRequest(BaseModel):
+        agent_type: str
+        task: str
+        params: Optional[Dict[str, Any]] = None
+        device_id: Optional[str] = None
+        priority: int = 5
+
+    @router.post("/tasks/route", tags=["Tasks"])
+    async def route_task(body: RouteTaskRequest, request: Request):
+        """
+        Dispatch a task using the built-in TaskRouter, which automatically
+        selects the optimal agent based on availability, historical success
+        rate, and recency (load-balancing).
+        """
+        try:
+            task_id = await request.app.state.orchestrator.route_task(
+                body.agent_type, body.task, body.params,
+                body.device_id, body.priority,
+            )
+            return {"task_id": task_id}
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+
+    # ------------------------------------------------------------------
+    # Monitoring
+    # ------------------------------------------------------------------
+
+    @router.get("/monitoring/alerts", tags=["Monitoring"])
+    async def get_alerts(request: Request, device_id: Optional[str] = None):
+        """Return telemetry threshold-violation alerts, optionally filtered by device."""
+        monitor = getattr(request.app.state, "monitor", None)
+        if monitor is None:
+            return []
+        return monitor.get_alerts(device_id)
+
+    @router.get("/monitoring/telemetry/{device_id}", tags=["Monitoring"])
+    async def get_telemetry_history(device_id: str, request: Request):
+        """Return the recent telemetry history for a specific device."""
+        monitor = getattr(request.app.state, "monitor", None)
+        if monitor is None:
+            return []
+        return monitor.get_telemetry_history(device_id)
+
+    @router.get("/monitoring/policies", tags=["Monitoring"])
+    async def list_automation_policies(request: Request):
+        """List all registered automation policies and their run statistics."""
+        automation = getattr(request.app.state, "automation", None)
+        if automation is None:
+            return []
+        return automation.list_policies()
+
     return router
