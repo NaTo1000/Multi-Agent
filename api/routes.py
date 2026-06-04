@@ -299,4 +299,78 @@ def build_router():
         )
         return request.app.state.orchestrator.get_task_result(task_id)
 
+    # ------------------------------------------------------------------
+    # SuperNAi — Quantum Topology Mesh Super Network AI
+    # ------------------------------------------------------------------
+
+    def _get_super_nai_agent(request: Request):
+        agents = request.app.state.orchestrator.get_agents_by_type("super_nai_agent")
+        if not agents:
+            raise HTTPException(status_code=503, detail="No SuperNAi agent registered")
+        return agents[0]
+
+    @router.get("/supernai/status", tags=["SuperNAi"])
+    async def supernai_status(request: Request):
+        """Return the current quantum topology mesh status and fleet intelligence score."""
+        agent = _get_super_nai_agent(request)
+        task_id = await request.app.state.orchestrator.dispatch_task(
+            agent.agent_id, "mesh_status", {}
+        )
+        return request.app.state.orchestrator.get_task_result(task_id)
+
+    @router.get("/supernai/insight", tags=["SuperNAi"])
+    async def supernai_insight(request: Request):
+        """Generate a full fleet intelligence insight report from the quantum topology mesh."""
+        agent = _get_super_nai_agent(request)
+        task_id = await request.app.state.orchestrator.dispatch_task(
+            agent.agent_id, "insight", {}
+        )
+        return request.app.state.orchestrator.get_task_result(task_id)
+
+    @router.post("/supernai/insight", tags=["SuperNAi"])
+    async def supernai_insight_with_context(body: Dict[str, Any], request: Request):
+        """Generate a fleet intelligence insight report enriched with caller-supplied context."""
+        agent = _get_super_nai_agent(request)
+        task_id = await request.app.state.orchestrator.dispatch_task(
+            agent.agent_id, "insight", {"context": body}
+        )
+        return request.app.state.orchestrator.get_task_result(task_id)
+
+    @router.post("/supernai/optimise", tags=["SuperNAi"])
+    async def supernai_optimise_mesh(request: Request):
+        """Trigger a full quantum topology mesh edge-weight recomputation."""
+        agent = _get_super_nai_agent(request)
+        task_id = await request.app.state.orchestrator.dispatch_task(
+            agent.agent_id, "optimise_mesh", {}
+        )
+        return request.app.state.orchestrator.get_task_result(task_id)
+
+    @router.get("/supernai/score", tags=["SuperNAi"])
+    async def supernai_fleet_score(request: Request):
+        """Return the scalar fleet intelligence score [0, 1]."""
+        agent = _get_super_nai_agent(request)
+        task_id = await request.app.state.orchestrator.dispatch_task(
+            agent.agent_id, "fleet_score", {}
+        )
+        return request.app.state.orchestrator.get_task_result(task_id)
+
+    @router.post("/supernai/fuse", tags=["SuperNAi"])
+    async def supernai_fuse(body: Dict[str, Any], request: Request):
+        """Inject agent result snapshots into the quantum topology mesh."""
+        agent = _get_super_nai_agent(request)
+        results = body.get("results", [])
+        task_id = await request.app.state.orchestrator.dispatch_task(
+            agent.agent_id, "fuse", {"results": results}
+        )
+        return request.app.state.orchestrator.get_task_result(task_id)
+
+    @router.post("/supernai/rebalance", tags=["SuperNAi"])
+    async def supernai_rebalance(request: Request):
+        """Emit per-device topology rebalancing recommendations."""
+        agent = _get_super_nai_agent(request)
+        task_id = await request.app.state.orchestrator.dispatch_task(
+            agent.agent_id, "rebalance", {}
+        )
+        return request.app.state.orchestrator.get_task_result(task_id)
+
     return router

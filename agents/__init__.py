@@ -8,6 +8,7 @@ from .firmware_agent import FirmwareAgent
 from .comms_agent import CommsAgent
 from .ai_agent import AIAgent
 from .quantum_agent import QuantumAgent
+from .super_nai_agent import SuperNAiAgent
 
 __all__ = [
     "FrequencyAgent",
@@ -16,4 +17,5 @@ __all__ = [
     "CommsAgent",
     "AIAgent",
     "QuantumAgent",
+    "SuperNAiAgent",
 ]
