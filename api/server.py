@@ -35,9 +35,10 @@ def create_app(orchestrator=None):
         description=(
             "REST + WebSocket API for real-time multi-agent orchestration "
             "of ESP32 modules with AI-driven frequency control, modulation, "
-            "firmware OTA deployment, GPS/GNSS tracking, and cloud integration."
+            "firmware OTA deployment, GPS/GNSS tracking, cloud integration, "
+            "and quantum-computing-inspired optimisation (V2.1)."
         ),
-        version="1.0.0",
+        version="2.1.0",
     )
 
     # Allow cross-origin requests (mobile apps, web dashboards)

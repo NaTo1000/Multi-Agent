@@ -210,4 +210,93 @@ def build_router():
         )
         return request.app.state.orchestrator.get_task_result(task_id)
 
+    # ------------------------------------------------------------------
+    # Quantum  (V2.1)
+    # ------------------------------------------------------------------
+
+    class QuantumTaskRequest(BaseModel):
+        task: str
+        params: Optional[Dict[str, Any]] = None
+        device_id: Optional[str] = None
+
+    @router.post("/quantum/task", tags=["Quantum"])
+    async def quantum_task(body: QuantumTaskRequest, request: Request):
+        """Dispatch any task to the QuantumAgent."""
+        q_agents = request.app.state.orchestrator.get_agents_by_type("quantum_agent")
+        if not q_agents:
+            raise HTTPException(status_code=503, detail="No quantum agent registered")
+        try:
+            task_id = await request.app.state.orchestrator.dispatch_task(
+                q_agents[0].agent_id, body.task, body.params or {}, body.device_id
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        return request.app.state.orchestrator.get_task_result(task_id)
+
+    @router.post("/quantum/qaoa/{device_id}", tags=["Quantum"])
+    async def quantum_qaoa_optimise(device_id: str, body: Dict[str, Any], request: Request):
+        """Run QAOA frequency optimisation on a specific device."""
+        q_agents = request.app.state.orchestrator.get_agents_by_type("quantum_agent")
+        if not q_agents:
+            raise HTTPException(status_code=503, detail="No quantum agent registered")
+        task_id = await request.app.state.orchestrator.dispatch_task(
+            q_agents[0].agent_id, "qaoa_optimise", body, device_id
+        )
+        return request.app.state.orchestrator.get_task_result(task_id)
+
+    @router.post("/quantum/qkd/{device_id}", tags=["Quantum"])
+    async def quantum_qkd(device_id: str, body: Dict[str, Any], request: Request):
+        """Run BB84 QKD key exchange with a device."""
+        q_agents = request.app.state.orchestrator.get_agents_by_type("quantum_agent")
+        if not q_agents:
+            raise HTTPException(status_code=503, detail="No quantum agent registered")
+        task_id = await request.app.state.orchestrator.dispatch_task(
+            q_agents[0].agent_id, "qkd_simulate", body, device_id
+        )
+        return request.app.state.orchestrator.get_task_result(task_id)
+
+    @router.post("/quantum/grover", tags=["Quantum"])
+    async def quantum_grover_search(body: Dict[str, Any], request: Request):
+        """Run Grover-inspired channel search over a candidate set."""
+        q_agents = request.app.state.orchestrator.get_agents_by_type("quantum_agent")
+        if not q_agents:
+            raise HTTPException(status_code=503, detail="No quantum agent registered")
+        task_id = await request.app.state.orchestrator.dispatch_task(
+            q_agents[0].agent_id, "grover_search", body
+        )
+        return request.app.state.orchestrator.get_task_result(task_id)
+
+    @router.post("/quantum/qft", tags=["Quantum"])
+    async def quantum_qft_spectrum(body: Dict[str, Any], request: Request):
+        """Perform QFT-based interference spectrum analysis."""
+        q_agents = request.app.state.orchestrator.get_agents_by_type("quantum_agent")
+        if not q_agents:
+            raise HTTPException(status_code=503, detail="No quantum agent registered")
+        task_id = await request.app.state.orchestrator.dispatch_task(
+            q_agents[0].agent_id, "qft_spectrum", body
+        )
+        return request.app.state.orchestrator.get_task_result(task_id)
+
+    @router.post("/quantum/qrng", tags=["Quantum"])
+    async def quantum_qrng(body: Dict[str, Any], request: Request):
+        """Generate quantum-random bytes."""
+        q_agents = request.app.state.orchestrator.get_agents_by_type("quantum_agent")
+        if not q_agents:
+            raise HTTPException(status_code=503, detail="No quantum agent registered")
+        task_id = await request.app.state.orchestrator.dispatch_task(
+            q_agents[0].agent_id, "qrng", body
+        )
+        return request.app.state.orchestrator.get_task_result(task_id)
+
+    @router.post("/quantum/entangle", tags=["Quantum"])
+    async def quantum_entangle_fleet(body: Dict[str, Any], request: Request):
+        """Synchronise the entire fleet via GHZ quantum-entanglement-inspired consensus."""
+        q_agents = request.app.state.orchestrator.get_agents_by_type("quantum_agent")
+        if not q_agents:
+            raise HTTPException(status_code=503, detail="No quantum agent registered")
+        task_id = await request.app.state.orchestrator.dispatch_task(
+            q_agents[0].agent_id, "entangle_fleet", body
+        )
+        return request.app.state.orchestrator.get_task_result(task_id)
+
     return router
