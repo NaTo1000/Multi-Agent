@@ -30,6 +30,7 @@ def build_orchestrator(config: dict):
         ModulationAgent,
         QuantumAgent,
         SuperNAiAgent,
+        CouncilAgent,
     )
 
     orch = Orchestrator(config)
@@ -42,6 +43,7 @@ def build_orchestrator(config: dict):
     orch.register_agent(AIAgent(config.get("ai_agent", {})))
     orch.register_agent(QuantumAgent(config.get("quantum_agent", {})))
     orch.register_agent(SuperNAiAgent(config.get("super_nai", {})))
+    orch.register_agent(CouncilAgent(config.get("council_agent", {})))
 
     return orch
 
