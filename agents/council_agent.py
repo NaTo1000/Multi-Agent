@@ -2,8 +2,8 @@
 CouncilAgent — orchestrator agent wrapping AICouncil.
 
 Exposes the AI council's parallel/series execution, API-key vault,
-and real-time formula updates as dispatchable tasks so the orchestrator
-routes them through the standard task-dispatch mechanism.
+real-time formula updates, 369 cluster cross-examination, and build
+token metering as dispatchable tasks.
 
 Tasks
 -----
@@ -15,6 +15,10 @@ rotate_key      – Replace a member's API key without downtime
 enable_member   – Enable or disable a member without removing them
 update_formula  – Set / update a leveraged formula parameter in real time
 remove_formula  – Delete a formula parameter
+form_clusters   – Partition enabled members into 3-6-9 clusters
+rotate_roles    – Advance musical-chairs role rotation by one seat
+current_roles   – Return current role assignment for all clustered members
+get_token_meter – Return token usage and fairness report
 get_status      – Return a safe council status snapshot (keys masked)
 """
 
@@ -37,10 +41,13 @@ class CouncilAgent(AgentBase):
 
     Configuration keys (``config`` dict / ``council_agent`` YAML section)
     -----------------------------------------------------------------------
-    execution_mode  : ``"parallel"`` (default) or ``"series"``
-    formulas        : dict of initial formula name → value pairs
-    members         : list of dicts with keys ``name``, ``endpoint``,
-                      ``api_key``, ``role`` (optional), ``position`` (optional)
+    execution_mode          : ``"parallel"`` (default) or ``"series"``
+    formulas                : dict of initial formula name → value pairs
+    cluster_size            : preferred cluster size, one of 3 / 6 / 9
+    token_budget_per_member : token budget before a member is flagged (default 2048)
+    hallucination_threshold : score threshold for hallucination flagging (default 0.4)
+    members                 : list of dicts with keys ``name``, ``endpoint``,
+                              ``api_key``, ``role`` (optional), ``position`` (optional)
     """
 
     TASKS = {
@@ -52,6 +59,10 @@ class CouncilAgent(AgentBase):
         "enable_member",
         "update_formula",
         "remove_formula",
+        "form_clusters",
+        "rotate_roles",
+        "current_roles",
+        "get_token_meter",
         "get_status",
     }
 
@@ -99,6 +110,8 @@ class CouncilAgent(AgentBase):
             return await self.council.run(
                 task=params.get("task", "research"),
                 params=params.get("params"),
+                cross_examine=bool(params.get("cross_examine", False)),
+                rotate_before_run=bool(params.get("rotate_before_run", False)),
             )
 
         if task == "set_mode":
@@ -164,6 +177,22 @@ class CouncilAgent(AgentBase):
                 raise ValueError("remove_formula requires 'name'")
             removed = self.council.remove_formula(name)
             return {"ok": removed, "name": name}
+
+        if task == "form_clusters":
+            preferred_size = params.get("preferred_size")
+            return self.council.form_clusters(preferred_size=preferred_size)
+
+        if task == "rotate_roles":
+            return {"roles": self.council.rotate_roles(), "ok": True}
+
+        if task == "current_roles":
+            return {"roles": self.council.current_roles()}
+
+        if task == "get_token_meter":
+            return {
+                "fairness": self.council._token_meter.fairness_report(),  # pylint: disable=protected-access
+                "innovation": self.council._token_meter.innovation_score(),  # pylint: disable=protected-access
+            }
 
         if task == "get_status":
             return self.council.get_status()

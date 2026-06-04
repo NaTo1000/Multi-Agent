@@ -1,44 +1,54 @@
 """
 AI Council — multi-member AI panel with API-key vault, parallel/series
-execution switching, and real-time leveraged formula updates.
+execution switching, real-time leveraged formula updates, 369 cluster
+cross-examination, and build token metering.
 
 Architecture
 ------------
 
-                       ┌─────────────────────────────────────┐
-                       │            AICouncil                │
-                       │                                     │
-                       │  ApiKeyVault                        │
-                       │  ┌───────────────────────────────┐  │
-                       │  │  key_id → masked/raw key      │  │
-                       │  └───────────────────────────────┘  │
-                       │                                     │
-                       │  CouncilMembers  [A, B, C, …]       │
-                       │  each with: name, endpoint,         │
-                       │             key_id, role            │
-                       │                                     │
-                       │  ExecutionMode                      │
-                       │  ┌─────────────┐  ┌─────────────┐  │
-                       │  │  PARALLEL   │  │   SERIES    │  │
-                       │  │ all members │  │ A→B→C chain │  │
-                       │  │ concurrently│  │ output feeds│  │
-                       │  │ → aggregate │  │ next input  │  │
-                       │  └─────────────┘  └─────────────┘  │
-                       │                                     │
-                       │  Leveraged Formulas (live update)   │
-                       │  ┌───────────────────────────────┐  │
-                       │  │  name → value (float/dict)    │  │
-                       │  │  injected into every call     │  │
-                       │  └───────────────────────────────┘  │
-                       └─────────────────────────────────────┘
+                       ┌────────────────────────────────────────────┐
+                       │                AICouncil                   │
+                       │                                            │
+                       │  ApiKeyVault                               │
+                       │  ┌──────────────────────────────────────┐  │
+                       │  │  key_id → masked/raw key             │  │
+                       │  └──────────────────────────────────────┘  │
+                       │                                            │
+                       │  CouncilMembers  [A, B, C, …]              │
+                       │  each with: name, endpoint, key_id, role   │
+                       │                                            │
+                       │  ExecutionMode                             │
+                       │  ┌─────────────┐  ┌──────────────┐        │
+                       │  │  PARALLEL   │  │   SERIES     │        │
+                       │  │ all members │  │ A→B→C chain  │        │
+                       │  │ concurrently│  │ output feeds │        │
+                       │  └─────────────┘  └──────────────┘        │
+                       │                                            │
+                       │  Leveraged Formulas (live update)          │
+                       │  ┌──────────────────────────────────────┐  │
+                       │  │  name → value  (injected every run)  │  │
+                       │  └──────────────────────────────────────┘  │
+                       │                                            │
+                       │  369 Cluster System (optional)             │
+                       │  ┌──────────────────────────────────────┐  │
+                       │  │ Cluster369 ─ form / rotate roles     │  │
+                       │  │ CrossExaminer ─ OPPOSITION/FACT/HAL  │  │
+                       │  │ BuildTokenMeter ─ fairness + score   │  │
+                       │  └──────────────────────────────────────┘  │
+                       └────────────────────────────────────────────┘
 
 Key concepts
 ------------
-- ApiKeyVault  — stores API keys by opaque key_id; keys are never logged.
-- CouncilMember — an AI endpoint registered in the council with a vaulted key.
-- ExecutionMode — PARALLEL (gather) or SERIES (chain); switchable at runtime.
+- ApiKeyVault    — stores API keys by opaque key_id; keys are never logged.
+- CouncilMember  — an AI endpoint registered in the council with a vaulted key.
+- ExecutionMode  — PARALLEL (gather) or SERIES (chain); switchable at runtime.
 - Leveraged formulas — named float/dict parameters merged into every request
   and updatable mid-run so behaviour adapts in real time.
+- Cluster369     — groups members into 3/6/9 seats with musical-chairs rotation.
+- CrossExaminer  — post-execution cross-examination (opposition, fact-breaker,
+  hallucination detector).
+- BuildTokenMeter — tracks token usage, enforces per-member fairness budget,
+  and emits platform innovation metrics.
 """
 
 import asyncio
@@ -49,6 +59,13 @@ import urllib.request
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Dict, List, Optional
+
+from ai.council_cluster import (
+    BuildTokenMeter,
+    Cluster369,
+    CrossExaminer,
+    MemberRole,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -223,6 +240,19 @@ class AICouncil:
         self._formulas: Dict[str, Any] = dict(self.config.get("formulas", {}))
         self._run_count: int = 0
 
+        # 369 cluster subsystem
+        preferred_cluster_size = self.config.get("cluster_size", 3)
+        self._cluster = Cluster369(preferred_size=preferred_cluster_size)
+        self._clusters_formed: bool = False
+
+        # Cross-examination subsystem
+        hallucination_threshold = self.config.get("hallucination_threshold", 0.4)
+        self._examiner = CrossExaminer(hallucination_threshold=hallucination_threshold)
+
+        # Build token meter
+        budget = self.config.get("token_budget_per_member", 2048)
+        self._token_meter = BuildTokenMeter(budget_per_member=budget)
+
     # ------------------------------------------------------------------
     # Member management
     # ------------------------------------------------------------------
@@ -330,6 +360,58 @@ class AICouncil:
         return dict(self._formulas)
 
     # ------------------------------------------------------------------
+    # 369 Cluster management
+    # ------------------------------------------------------------------
+
+    def form_clusters(self, preferred_size: Optional[int] = None) -> Dict[str, Any]:
+        """
+        Partition enabled members into 3-6-9 clusters and assign initial roles.
+
+        Parameters
+        ----------
+        preferred_size : int or None
+            Override the configured cluster size for this formation (must be
+            3, 6, or 9).  Defaults to the value from config.
+
+        Returns
+        -------
+        dict
+            Cluster status snapshot including current role assignments.
+        """
+        if preferred_size is not None:
+            self._cluster = Cluster369(preferred_size=preferred_size)
+
+        active_names = [
+            m.name
+            for m in sorted(self._members.values(), key=lambda m: m.position)
+            if m.enabled
+        ]
+        self._cluster.form(active_names)
+        self._clusters_formed = True
+        logger.info("AICouncil: clusters formed for %d members", len(active_names))
+        return self._cluster.get_status()
+
+    def rotate_roles(self) -> Dict[str, str]:
+        """
+        Advance the musical-chairs role rotation by one seat across all clusters.
+
+        Returns
+        -------
+        dict
+            Updated mapping of member_name → role value.
+        """
+        if not self._clusters_formed:
+            self.form_clusters()
+        roles = self._cluster.rotate_all()
+        return {name: role.value for name, role in roles.items()}
+
+    def current_roles(self) -> Dict[str, str]:
+        """Return the current role of every clustered member (values as strings)."""
+        if not self._clusters_formed:
+            return {}
+        return {name: role.value for name, role in self._cluster.current_roles().items()}
+
+    # ------------------------------------------------------------------
     # Execution
     # ------------------------------------------------------------------
 
@@ -337,6 +419,8 @@ class AICouncil:
         self,
         task: str,
         params: Optional[Dict[str, Any]] = None,
+        cross_examine: bool = False,
+        rotate_before_run: bool = False,
     ) -> Dict[str, Any]:
         """
         Execute the council against a task.
@@ -346,13 +430,20 @@ class AICouncil:
 
         Parameters
         ----------
-        task   : Logical task name passed to each member.
-        params : Base parameters; formulas are merged on top.
+        task              : Logical task name passed to each member.
+        params            : Base parameters; formulas are merged on top.
+        cross_examine     : When True, run the 369 cross-examination pipeline
+                            after the primary execution.  Clusters are formed
+                            automatically if not already done.
+        rotate_before_run : When True, rotate musical-chairs roles one seat
+                            before executing (takes effect on this run).
 
         Returns
         -------
         dict
-            ``mode``, ``task``, ``formulas_applied``, and ``results`` (list).
+            ``mode``, ``task``, ``formulas_applied``, ``results``, and —
+            when ``cross_examine=True`` — ``cluster_status``, ``roles``,
+            ``token_meter``, and ``innovation_score``.
         """
         effective_params = {**(params or {}), **self._formulas}
         active = sorted(
@@ -370,17 +461,35 @@ class AICouncil:
             }
 
         self._run_count += 1
+
+        # --- 369 cluster setup & optional rotation ---
+        if cross_examine:
+            if not self._clusters_formed:
+                self.form_clusters()
+            if rotate_before_run:
+                self._cluster.rotate_all()
+
+        roles = self._cluster.current_roles() if self._clusters_formed else {}
+
         logger.info(
-            "AICouncil.run #%d: task='%s' mode=%s members=%d",
-            self._run_count, task, self._mode.value, len(active),
+            "AICouncil.run #%d: task='%s' mode=%s members=%d cross_examine=%s",
+            self._run_count, task, self._mode.value, len(active), cross_examine,
         )
 
+        # --- Primary execution ---
         if self._mode == ExecutionMode.PARALLEL:
             results = await self._run_parallel(task, effective_params, active)
         else:
             results = await self._run_series(task, effective_params, active)
 
-        return {
+        # --- Token metering (record every result) ---
+        for result in results:
+            member_name = result.get("member", "unknown")
+            response_text = str(result.get("response", ""))
+            token_count = self._token_meter.record(member_name, response_text)
+            result["token_count"] = token_count
+
+        output: Dict[str, Any] = {
             "mode": self._mode.value,
             "task": task,
             "formulas_applied": dict(self._formulas),
@@ -388,6 +497,16 @@ class AICouncil:
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "results": results,
         }
+
+        # --- Cross-examination pass ---
+        if cross_examine:
+            self._examiner.examine(results, roles)
+            output["cluster_status"] = self._cluster.get_status()
+            output["roles"] = {name: role.value for name, role in roles.items()}
+            output["token_meter"] = self._token_meter.fairness_report()
+            output["innovation_score"] = self._token_meter.innovation_score()
+
+        return output
 
     async def _run_parallel(
         self,
@@ -511,7 +630,7 @@ class AICouncil:
 
     def get_status(self) -> Dict[str, Any]:
         """Return a safe status snapshot (API keys masked)."""
-        return {
+        status: Dict[str, Any] = {
             "mode": self._mode.value,
             "members": [m.to_dict(self._vault) for m in sorted(
                 self._members.values(), key=lambda m: m.position
@@ -519,4 +638,7 @@ class AICouncil:
             "formulas": dict(self._formulas),
             "vault_size": len(self._vault),
             "total_runs": self._run_count,
+            "cluster": self._cluster.get_status() if self._clusters_formed else None,
+            "token_meter": self._token_meter.fairness_report(),
         }
+        return status
