@@ -9,6 +9,7 @@ import {
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import API from '../services/api';
+import COLORS from '../theme';
 
 export default function SettingsScreen() {
   const [host, setHost] = useState('http://192.168.1.1:8000');
@@ -64,6 +65,7 @@ export default function SettingsScreen() {
         value={host}
         onChangeText={setHost}
         placeholder="http://192.168.1.1:8000"
+        placeholderTextColor={COLORS.textMuted}
         autoCapitalize="none"
         keyboardType="url"
       />
@@ -79,6 +81,7 @@ export default function SettingsScreen() {
         value={cloudEndpoint}
         onChangeText={setCloudEndpoint}
         placeholder="https://your-endpoint.example.com/telemetry"
+        placeholderTextColor={COLORS.textMuted}
         autoCapitalize="none"
         keyboardType="url"
       />
@@ -89,7 +92,12 @@ export default function SettingsScreen() {
           <Text style={styles.toggleLabel}>Live WebSocket Updates</Text>
           <Text style={styles.toggleDesc}>Stream real-time data from orchestrator</Text>
         </View>
-        <Switch value={liveUpdates} onValueChange={setLiveUpdates} />
+        <Switch
+          value={liveUpdates}
+          onValueChange={setLiveUpdates}
+          trackColor={{ false: COLORS.border, true: COLORS.yellow }}
+          thumbColor={liveUpdates ? COLORS.green : COLORS.textMuted}
+        />
       </View>
 
       <TouchableOpacity
@@ -101,7 +109,9 @@ export default function SettingsScreen() {
       </TouchableOpacity>
 
       <View style={styles.about}>
-        <Text style={styles.aboutText}>Multi-Agent ESP32 Orchestration v1.0.0</Text>
+        <Text style={styles.pineappleEmoji}>🍍</Text>
+        <Text style={styles.aboutTitle}>PiNaCoLlAda</Text>
+        <Text style={styles.aboutText}>ESP32 Multi-Agent Orchestration v1.0.0</Text>
         <Text style={styles.aboutSub}>WiFi · BLE 5 · GPS/GNSS · Cloud · AI</Text>
       </View>
     </ScrollView>
@@ -109,36 +119,40 @@ export default function SettingsScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#f5f5f5' },
+  container: { flex: 1, backgroundColor: COLORS.background },
   sectionHeader: {
-    fontSize: 12, fontWeight: '700', color: '#555',
+    fontSize: 12, fontWeight: '700', color: COLORS.greenDark,
     textTransform: 'uppercase', marginTop: 20, marginBottom: 8,
   },
-  label: { fontSize: 11, color: '#888', marginBottom: 4 },
+  label: { fontSize: 11, color: COLORS.textMuted, marginBottom: 4 },
   input: {
-    backgroundColor: '#fff', borderRadius: 8,
-    borderWidth: 1, borderColor: '#ddd',
-    padding: 10, fontSize: 14, marginBottom: 10,
+    backgroundColor: COLORS.surface, borderRadius: 8,
+    borderWidth: 1, borderColor: COLORS.border,
+    padding: 10, fontSize: 14, marginBottom: 10, color: COLORS.textPrimary,
   },
   secondaryBtn: {
-    borderWidth: 1, borderColor: '#0066CC', borderRadius: 8,
+    borderWidth: 1, borderColor: COLORS.green, borderRadius: 8,
     padding: 10, alignItems: 'center', marginBottom: 8,
+    backgroundColor: COLORS.surface,
   },
-  secondaryBtnText: { color: '#0066CC', fontWeight: '600' },
+  secondaryBtnText: { color: COLORS.green, fontWeight: '600' },
   toggle: {
     flexDirection: 'row', justifyContent: 'space-between',
-    alignItems: 'center', backgroundColor: '#fff',
+    alignItems: 'center', backgroundColor: COLORS.surface,
     borderRadius: 8, padding: 12, marginBottom: 8,
+    borderWidth: 1, borderColor: COLORS.border,
   },
-  toggleLabel: { fontSize: 13, fontWeight: '600', color: '#222' },
-  toggleDesc: { fontSize: 11, color: '#888', marginTop: 1 },
+  toggleLabel: { fontSize: 13, fontWeight: '600', color: COLORS.textPrimary },
+  toggleDesc: { fontSize: 11, color: COLORS.textMuted, marginTop: 1 },
   saveBtn: {
-    backgroundColor: '#0066CC', borderRadius: 10,
+    backgroundColor: COLORS.yellow, borderRadius: 10,
     padding: 14, alignItems: 'center', marginTop: 16,
   },
   btnDisabled: { opacity: 0.5 },
-  saveBtnText: { color: '#fff', fontWeight: '700', fontSize: 15 },
+  saveBtnText: { color: COLORS.greenDark, fontWeight: '700', fontSize: 15 },
   about: { alignItems: 'center', marginTop: 32, paddingBottom: 24 },
-  aboutText: { fontSize: 13, color: '#888' },
-  aboutSub: { fontSize: 11, color: '#aaa', marginTop: 3 },
+  pineappleEmoji: { fontSize: 36, marginBottom: 6 },
+  aboutTitle: { fontSize: 18, fontWeight: '800', color: COLORS.green, letterSpacing: 1 },
+  aboutText: { fontSize: 13, color: COLORS.textMuted, marginTop: 4 },
+  aboutSub: { fontSize: 11, color: COLORS.textMuted, marginTop: 3 },
 });

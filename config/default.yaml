@@ -28,6 +28,23 @@ comms_agent:
 ai_agent:
   ai_research_endpoint: ""       # Optional LLM/cloud AI endpoint
 
+# AI Council agent
+council_agent:
+  execution_mode: "parallel"     # parallel | series
+  cluster_size: 3                # 369 tribute cluster preferred size (3 | 6 | 9)
+  token_budget_per_member: 2048  # max tokens per member per build round
+  hallucination_threshold: 0.4   # score at which output is flagged (0–1)
+  formulas:                      # Leveraged formula defaults (live-updatable)
+    temperature: 0.7
+    max_tokens: 512
+  members: []                    # Pre-registered members (see docs)
+  # Example member entry:
+  # - name: strategist
+  #   endpoint: ""               # Set to your LLM endpoint
+  #   api_key: ""                # Stored in vault at startup — never logged
+  #   role: "High-level planning"
+  #   position: 0
+
 # API server
 server:
   host: "0.0.0.0"

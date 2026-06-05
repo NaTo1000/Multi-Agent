@@ -8,6 +8,7 @@ import {
   Modal, TextInput, Alert, ActivityIndicator,
 } from 'react-native';
 import API from '../services/api';
+import COLORS from '../theme';
 
 export default function DevicesScreen() {
   const [devices, setDevices] = useState([]);
@@ -110,17 +111,20 @@ export default function DevicesScreen() {
           <View style={styles.modal}>
             <Text style={styles.modalTitle}>Add ESP32 Device</Text>
             <TextInput style={styles.input} placeholder="Device ID (e.g. esp32-001)"
+              placeholderTextColor={COLORS.textMuted}
               value={form.device_id}
               onChangeText={(v) => setForm({ ...form, device_id: v })} />
             <TextInput style={styles.input} placeholder="Name"
+              placeholderTextColor={COLORS.textMuted}
               value={form.name}
               onChangeText={(v) => setForm({ ...form, name: v })} />
             <TextInput style={styles.input} placeholder="IP Address (optional)"
+              placeholderTextColor={COLORS.textMuted}
               value={form.ip_address}
               onChangeText={(v) => setForm({ ...form, ip_address: v })} />
             <View style={styles.modalActions}>
               <TouchableOpacity style={styles.btnSecondary} onPress={() => setAddModal(false)}>
-                <Text>Cancel</Text>
+                <Text style={styles.btnSecondaryText}>Cancel</Text>
               </TouchableOpacity>
               <TouchableOpacity style={styles.btnPrimary} onPress={handleAdd}>
                 <Text style={styles.btnPrimaryText}>Add Device</Text>
@@ -136,8 +140,8 @@ export default function DevicesScreen() {
 function MetaItem({ label, value }) {
   return (
     <View style={{ marginRight: 16 }}>
-      <Text style={{ fontSize: 10, color: '#888' }}>{label}</Text>
-      <Text style={{ fontSize: 12, color: '#333', fontWeight: '600' }}>{value}</Text>
+      <Text style={{ fontSize: 10, color: COLORS.textMuted }}>{label}</Text>
+      <Text style={{ fontSize: 12, color: COLORS.textPrimary, fontWeight: '600' }}>{value}</Text>
     </View>
   );
 }
@@ -151,54 +155,59 @@ function ActionBtn({ label, onPress }) {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#f5f5f5' },
+  container: { flex: 1, backgroundColor: COLORS.background },
   card: {
-    backgroundColor: '#fff', borderRadius: 10,
+    backgroundColor: COLORS.surface, borderRadius: 10,
     padding: 14, marginBottom: 10, elevation: 2,
+    borderWidth: 1, borderColor: COLORS.border,
   },
   cardHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  name: { fontSize: 15, fontWeight: '700', color: '#222' },
-  sub: { fontSize: 12, color: '#888', marginTop: 1 },
+  name: { fontSize: 15, fontWeight: '700', color: COLORS.textPrimary },
+  sub: { fontSize: 12, color: COLORS.textMuted, marginTop: 1 },
   badge: { paddingHorizontal: 8, paddingVertical: 3, borderRadius: 12 },
-  badgeGreen: { backgroundColor: '#d4edda' },
-  badgeRed: { backgroundColor: '#f8d7da' },
-  badgeText: { fontSize: 11, fontWeight: '600' },
+  badgeGreen: { backgroundColor: '#D6F0E0' },
+  badgeRed: { backgroundColor: '#FADADD' },
+  badgeText: { fontSize: 11, fontWeight: '600', color: COLORS.textPrimary },
   meta: { flexDirection: 'row', marginTop: 10, marginBottom: 10 },
   actions: { flexDirection: 'row', gap: 8 },
   actionBtn: {
     flex: 1, padding: 8, borderRadius: 6,
-    borderWidth: 1, borderColor: '#0066CC', alignItems: 'center',
+    borderWidth: 1, borderColor: COLORS.green, alignItems: 'center',
+    backgroundColor: COLORS.surface,
   },
-  actionBtnText: { color: '#0066CC', fontSize: 12, fontWeight: '600' },
-  empty: { textAlign: 'center', color: '#999', marginTop: 60, fontSize: 14 },
+  actionBtnText: { color: COLORS.green, fontSize: 12, fontWeight: '600' },
+  empty: { textAlign: 'center', color: COLORS.textMuted, marginTop: 60, fontSize: 14 },
   fab: {
     position: 'absolute', right: 20, bottom: 20,
     width: 56, height: 56, borderRadius: 28,
-    backgroundColor: '#0066CC', alignItems: 'center', justifyContent: 'center',
+    backgroundColor: COLORS.yellow, alignItems: 'center', justifyContent: 'center',
     elevation: 4,
   },
-  fabText: { color: '#fff', fontSize: 30, lineHeight: 34 },
+  fabText: { color: COLORS.greenDark, fontSize: 30, lineHeight: 34, fontWeight: '700' },
   modalOverlay: {
     flex: 1, backgroundColor: 'rgba(0,0,0,0.4)',
     justifyContent: 'flex-end',
   },
   modal: {
-    backgroundColor: '#fff', borderTopLeftRadius: 16,
+    backgroundColor: COLORS.surface, borderTopLeftRadius: 16,
     borderTopRightRadius: 16, padding: 20,
   },
-  modalTitle: { fontSize: 17, fontWeight: '700', marginBottom: 16 },
+  modalTitle: { fontSize: 17, fontWeight: '700', marginBottom: 16, color: COLORS.greenDark },
   input: {
-    borderWidth: 1, borderColor: '#ddd', borderRadius: 8,
+    borderWidth: 1, borderColor: COLORS.border, borderRadius: 8,
     padding: 10, marginBottom: 12, fontSize: 14,
+    backgroundColor: COLORS.background, color: COLORS.textPrimary,
   },
   modalActions: { flexDirection: 'row', gap: 10, marginTop: 4 },
   btnSecondary: {
     flex: 1, padding: 12, borderRadius: 8,
-    borderWidth: 1, borderColor: '#ddd', alignItems: 'center',
+    borderWidth: 1, borderColor: COLORS.border, alignItems: 'center',
+    backgroundColor: COLORS.background,
   },
+  btnSecondaryText: { color: COLORS.textSecondary, fontWeight: '600' },
   btnPrimary: {
     flex: 1, padding: 12, borderRadius: 8,
-    backgroundColor: '#0066CC', alignItems: 'center',
+    backgroundColor: COLORS.green, alignItems: 'center',
   },
-  btnPrimaryText: { color: '#fff', fontWeight: '700' },
+  btnPrimaryText: { color: COLORS.textOnBrand, fontWeight: '700' },
 });

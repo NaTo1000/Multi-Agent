@@ -210,4 +210,167 @@ def build_router():
         )
         return request.app.state.orchestrator.get_task_result(task_id)
 
+    # ------------------------------------------------------------------
+    # Quantum  (V2.1)
+    # ------------------------------------------------------------------
+
+    class QuantumTaskRequest(BaseModel):
+        task: str
+        params: Optional[Dict[str, Any]] = None
+        device_id: Optional[str] = None
+
+    @router.post("/quantum/task", tags=["Quantum"])
+    async def quantum_task(body: QuantumTaskRequest, request: Request):
+        """Dispatch any task to the QuantumAgent."""
+        q_agents = request.app.state.orchestrator.get_agents_by_type("quantum_agent")
+        if not q_agents:
+            raise HTTPException(status_code=503, detail="No quantum agent registered")
+        try:
+            task_id = await request.app.state.orchestrator.dispatch_task(
+                q_agents[0].agent_id, body.task, body.params or {}, body.device_id
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        return request.app.state.orchestrator.get_task_result(task_id)
+
+    @router.post("/quantum/qaoa/{device_id}", tags=["Quantum"])
+    async def quantum_qaoa_optimise(device_id: str, body: Dict[str, Any], request: Request):
+        """Run QAOA frequency optimisation on a specific device."""
+        q_agents = request.app.state.orchestrator.get_agents_by_type("quantum_agent")
+        if not q_agents:
+            raise HTTPException(status_code=503, detail="No quantum agent registered")
+        task_id = await request.app.state.orchestrator.dispatch_task(
+            q_agents[0].agent_id, "qaoa_optimise", body, device_id
+        )
+        return request.app.state.orchestrator.get_task_result(task_id)
+
+    @router.post("/quantum/qkd/{device_id}", tags=["Quantum"])
+    async def quantum_qkd(device_id: str, body: Dict[str, Any], request: Request):
+        """Run BB84 QKD key exchange with a device."""
+        q_agents = request.app.state.orchestrator.get_agents_by_type("quantum_agent")
+        if not q_agents:
+            raise HTTPException(status_code=503, detail="No quantum agent registered")
+        task_id = await request.app.state.orchestrator.dispatch_task(
+            q_agents[0].agent_id, "qkd_simulate", body, device_id
+        )
+        return request.app.state.orchestrator.get_task_result(task_id)
+
+    @router.post("/quantum/grover", tags=["Quantum"])
+    async def quantum_grover_search(body: Dict[str, Any], request: Request):
+        """Run Grover-inspired channel search over a candidate set."""
+        q_agents = request.app.state.orchestrator.get_agents_by_type("quantum_agent")
+        if not q_agents:
+            raise HTTPException(status_code=503, detail="No quantum agent registered")
+        task_id = await request.app.state.orchestrator.dispatch_task(
+            q_agents[0].agent_id, "grover_search", body
+        )
+        return request.app.state.orchestrator.get_task_result(task_id)
+
+    @router.post("/quantum/qft", tags=["Quantum"])
+    async def quantum_qft_spectrum(body: Dict[str, Any], request: Request):
+        """Perform QFT-based interference spectrum analysis."""
+        q_agents = request.app.state.orchestrator.get_agents_by_type("quantum_agent")
+        if not q_agents:
+            raise HTTPException(status_code=503, detail="No quantum agent registered")
+        task_id = await request.app.state.orchestrator.dispatch_task(
+            q_agents[0].agent_id, "qft_spectrum", body
+        )
+        return request.app.state.orchestrator.get_task_result(task_id)
+
+    @router.post("/quantum/qrng", tags=["Quantum"])
+    async def quantum_qrng(body: Dict[str, Any], request: Request):
+        """Generate quantum-random bytes."""
+        q_agents = request.app.state.orchestrator.get_agents_by_type("quantum_agent")
+        if not q_agents:
+            raise HTTPException(status_code=503, detail="No quantum agent registered")
+        task_id = await request.app.state.orchestrator.dispatch_task(
+            q_agents[0].agent_id, "qrng", body
+        )
+        return request.app.state.orchestrator.get_task_result(task_id)
+
+    @router.post("/quantum/entangle", tags=["Quantum"])
+    async def quantum_entangle_fleet(body: Dict[str, Any], request: Request):
+        """Synchronise the entire fleet via GHZ quantum-entanglement-inspired consensus."""
+        q_agents = request.app.state.orchestrator.get_agents_by_type("quantum_agent")
+        if not q_agents:
+            raise HTTPException(status_code=503, detail="No quantum agent registered")
+        task_id = await request.app.state.orchestrator.dispatch_task(
+            q_agents[0].agent_id, "entangle_fleet", body
+        )
+        return request.app.state.orchestrator.get_task_result(task_id)
+
+    # ------------------------------------------------------------------
+    # SuperNAi — Quantum Topology Mesh Super Network AI
+    # ------------------------------------------------------------------
+
+    def _get_super_nai_agent(request: Request):
+        agents = request.app.state.orchestrator.get_agents_by_type("super_nai_agent")
+        if not agents:
+            raise HTTPException(status_code=503, detail="No SuperNAi agent registered")
+        return agents[0]
+
+    @router.get("/supernai/status", tags=["SuperNAi"])
+    async def supernai_status(request: Request):
+        """Return the current quantum topology mesh status and fleet intelligence score."""
+        agent = _get_super_nai_agent(request)
+        task_id = await request.app.state.orchestrator.dispatch_task(
+            agent.agent_id, "mesh_status", {}
+        )
+        return request.app.state.orchestrator.get_task_result(task_id)
+
+    @router.get("/supernai/insight", tags=["SuperNAi"])
+    async def supernai_insight(request: Request):
+        """Generate a full fleet intelligence insight report from the quantum topology mesh."""
+        agent = _get_super_nai_agent(request)
+        task_id = await request.app.state.orchestrator.dispatch_task(
+            agent.agent_id, "insight", {}
+        )
+        return request.app.state.orchestrator.get_task_result(task_id)
+
+    @router.post("/supernai/insight", tags=["SuperNAi"])
+    async def supernai_insight_with_context(body: Dict[str, Any], request: Request):
+        """Generate a fleet intelligence insight report enriched with caller-supplied context."""
+        agent = _get_super_nai_agent(request)
+        task_id = await request.app.state.orchestrator.dispatch_task(
+            agent.agent_id, "insight", {"context": body}
+        )
+        return request.app.state.orchestrator.get_task_result(task_id)
+
+    @router.post("/supernai/optimise", tags=["SuperNAi"])
+    async def supernai_optimise_mesh(request: Request):
+        """Trigger a full quantum topology mesh edge-weight recomputation."""
+        agent = _get_super_nai_agent(request)
+        task_id = await request.app.state.orchestrator.dispatch_task(
+            agent.agent_id, "optimise_mesh", {}
+        )
+        return request.app.state.orchestrator.get_task_result(task_id)
+
+    @router.get("/supernai/score", tags=["SuperNAi"])
+    async def supernai_fleet_score(request: Request):
+        """Return the scalar fleet intelligence score [0, 1]."""
+        agent = _get_super_nai_agent(request)
+        task_id = await request.app.state.orchestrator.dispatch_task(
+            agent.agent_id, "fleet_score", {}
+        )
+        return request.app.state.orchestrator.get_task_result(task_id)
+
+    @router.post("/supernai/fuse", tags=["SuperNAi"])
+    async def supernai_fuse(body: Dict[str, Any], request: Request):
+        """Inject agent result snapshots into the quantum topology mesh."""
+        agent = _get_super_nai_agent(request)
+        results = body.get("results", [])
+        task_id = await request.app.state.orchestrator.dispatch_task(
+            agent.agent_id, "fuse", {"results": results}
+        )
+        return request.app.state.orchestrator.get_task_result(task_id)
+
+    @router.post("/supernai/rebalance", tags=["SuperNAi"])
+    async def supernai_rebalance(request: Request):
+        """Emit per-device topology rebalancing recommendations."""
+        agent = _get_super_nai_agent(request)
+        task_id = await request.app.state.orchestrator.dispatch_task(
+            agent.agent_id, "rebalance", {}
+        )
+        return request.app.state.orchestrator.get_task_result(task_id)
+
     return router

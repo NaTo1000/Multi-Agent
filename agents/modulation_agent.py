@@ -16,11 +16,21 @@ MODULATION_SCHEMES: Dict[str, Dict[str, Any]] = {
     "AM": {"bandwidth_hz": 10000, "carrier_required": True},
     "FM": {"bandwidth_hz": 200000, "deviation_hz": 75000},
     "FSK": {"bandwidth_hz": 250000, "deviation_hz": 25000},
-    "GFSK": {"bandwidth_hz": 250000, "bt": 0.5},       # BLE default
+    "GFSK": {"bandwidth_hz": 250000, "bt": 0.5},           # BLE default
     "OOK": {"bandwidth_hz": 100000},
     "QPSK": {"bandwidth_hz": 500000, "bits_per_symbol": 2},
     "QAM16": {"bandwidth_hz": 1000000, "bits_per_symbol": 4},
     "LoRa": {"spreading_factor": 7, "coding_rate": "4/5", "bandwidth_hz": 125000},
+    # V2.1 — Quantum-era high-order modulations
+    "QAM64": {"bandwidth_hz": 2000000, "bits_per_symbol": 6, "min_snr_db": 18},
+    "QAM256": {"bandwidth_hz": 4000000, "bits_per_symbol": 8, "min_snr_db": 24},
+    "QAM1024": {"bandwidth_hz": 8000000, "bits_per_symbol": 10, "min_snr_db": 30},
+    "QISS": {   # Quantum-Inspired Spread Spectrum
+        "bandwidth_hz": 20000000,
+        "spreading_gain_db": 43,
+        "quantum_hopping": True,
+        "bits_per_symbol": 1,
+    },
 }
 
 
@@ -114,7 +124,13 @@ class ModulationAgent(AgentBase):
             rssi = await device.get_rssi() or -100
             snr = rssi + 100  # rough approximation
 
-        if snr >= 25:
+        if snr >= 35:
+            scheme = "QAM1024"
+        elif snr >= 28:
+            scheme = "QAM256"
+        elif snr >= 20:
+            scheme = "QAM64"
+        elif snr >= 25:
             scheme = "QAM16"
         elif snr >= 15:
             scheme = "QPSK"

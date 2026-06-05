@@ -1,5 +1,5 @@
 /**
- * Multi-Agent ESP32 Orchestration App
+ * PiNaCoLlAda — Multi-Agent ESP32 Orchestration App
  * Cross-platform (iOS + Android) React Native application
  */
 
@@ -13,6 +13,7 @@ import DevicesScreen from './src/screens/DevicesScreen';
 import FrequencyScreen from './src/screens/FrequencyScreen';
 import FirmwareScreen from './src/screens/FirmwareScreen';
 import SettingsScreen from './src/screens/SettingsScreen';
+import COLORS from './src/theme';
 
 const Tab = createBottomTabNavigator();
 
@@ -22,17 +23,18 @@ export default function App() {
       <NavigationContainer>
         <Tab.Navigator
           screenOptions={{
-            tabBarActiveTintColor: '#0066CC',
-            tabBarInactiveTintColor: '#999',
-            headerStyle: { backgroundColor: '#0066CC' },
-            headerTintColor: '#fff',
+            tabBarActiveTintColor: COLORS.tabActive,
+            tabBarInactiveTintColor: COLORS.tabInactive,
+            tabBarStyle: { backgroundColor: COLORS.greenDark, borderTopColor: COLORS.green },
+            headerStyle: { backgroundColor: COLORS.headerBg },
+            headerTintColor: COLORS.headerText,
             headerTitleStyle: { fontWeight: 'bold' },
           }}
         >
           <Tab.Screen
             name="Dashboard"
             component={DashboardScreen}
-            options={{ title: 'Dashboard', tabBarLabel: 'Dashboard' }}
+            options={{ title: '🍍 PiNaCoLlAda', tabBarLabel: 'Dashboard' }}
           />
           <Tab.Screen
             name="Devices"

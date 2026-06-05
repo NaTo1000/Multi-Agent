@@ -1,6 +1,23 @@
-# Multi-Agent ESP32 Orchestration System
+# Multi-Agent ESP32 Orchestration System — V2.1 Quantum Edition
 
-A production-grade multi-agent orchestration platform for managing fleets of ESP32 modules in real time — with full AI automation, frequency/modulation control, on-the-fly firmware creation, GPS/GNSS, cloud integration, and a cross-platform mobile companion app.
+A production-grade multi-agent orchestration platform for managing fleets of ESP32 modules in real time — with full AI automation, frequency/modulation control, on-the-fly firmware creation, GPS/GNSS, cloud integration, a cross-platform mobile companion app, and a **supercharged quantum-computing layer** for optimal channel selection, secure key exchange, and fleet-wide synchronisation.
+
+---
+
+## What's New in V2.1
+
+| Feature | Details |
+|---|---|
+| **QuantumAgent** | New agent providing QAOA, Grover, QRNG, BB84 QKD, QFT, and GHZ entanglement |
+| **QAOA Optimisation** | Quantum Approximate Optimisation Algorithm for interference-free channel selection |
+| **Grover Channel Search** | Quadratic-speedup search over frequency candidates |
+| **BB84 QKD** | Full BB84 quantum key distribution simulation for secure device pairing |
+| **QFT Spectrum Analysis** | Quantum Fourier Transform-based interference detection |
+| **GHZ Fleet Entanglement** | Atomic fleet-wide frequency synchronisation via quantum consensus |
+| **QRNG** | Quantum-inspired random number generation (Hadamard mixing + OS entropy) |
+| **QuantumEngine** | Autonomous quantum-policy scheduler alongside the classical AutomationEngine |
+| **QAM64/256/1024 + QISS** | Higher-order quantum-era modulation schemes for ultra-high-throughput links |
+| **Quantum REST API** | `/api/v1/quantum/` route family for all quantum operations |
 
 ---
 
@@ -10,8 +27,10 @@ A production-grade multi-agent orchestration platform for managing fleets of ESP
 |---|---|
 | **Multi-Agent Orchestration** | Concurrent management of unlimited ESP32 modules |
 | **AI Automation** | Adaptive frequency locking, interference detection, modulation selection |
+| **Quantum Optimisation** | QAOA, Grover, QFT algorithms for superior channel/frequency decisions |
+| **Quantum Cryptography** | BB84 QKD session-key exchange, QRNG entropy generation |
 | **Frequency Control** | Scan, lock, fine-tune (PID), fleet-wide synchronisation |
-| **Modulation** | AM / FM / FSK / GFSK / LoRa / QPSK / QAM16 with adaptive selection |
+| **Modulation** | AM / FM / FSK / GFSK / LoRa / QPSK / QAM16–1024 / QISS with adaptive selection |
 | **Firmware OTA** | On-the-fly C++ generation, arduino-cli build, HTTP OTA flash |
 | **WiFi** | STA connection, network scanning, mDNS, HTTP API server on device |
 | **BLE 5** | 2M PHY advertising, GATT command server, paired-app communication |
@@ -27,21 +46,22 @@ A production-grade multi-agent orchestration platform for managing fleets of ESP
 ## Architecture
 
 ```
-┌───────────────────────────────────────────────────────────┐
-│                   Orchestrator (Python)                    │
-│                                                           │
-│  ┌─────────────┐  ┌──────────────┐  ┌─────────────────┐  │
-│  │ Frequency   │  │  Modulation  │  │    Firmware     │  │
-│  │   Agent     │  │    Agent     │  │     Agent       │  │
-│  └─────────────┘  └──────────────┘  └─────────────────┘  │
-│  ┌─────────────┐  ┌──────────────┐                        │
-│  │   Comms     │  │    AI        │  TaskScheduler          │
-│  │   Agent     │  │   Agent      │  EventBus              │
-│  └─────────────┘  └──────────────┘                        │
-│                                                           │
-│  REST API (FastAPI)  ●  WebSocket (real-time)             │
-│  Cloud Connectors    ●  Telemetry Monitor                 │
-└───────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────────┐
+│                     Orchestrator (Python)                            │
+│                                                                     │
+│  ┌─────────────┐  ┌──────────────┐  ┌─────────────────┐            │
+│  │ Frequency   │  │  Modulation  │  │    Firmware     │            │
+│  │   Agent     │  │    Agent     │  │     Agent       │            │
+│  └─────────────┘  └──────────────┘  └─────────────────┘            │
+│  ┌─────────────┐  ┌──────────────┐  ┌─────────────────┐            │
+│  │   Comms     │  │    AI        │  │    Quantum      │  V2.1 ★    │
+│  │   Agent     │  │   Agent      │  │     Agent       │            │
+│  └─────────────┘  └──────────────┘  └─────────────────┘            │
+│                                                                     │
+│  AutomationEngine (classical)  +  QuantumEngine (V2.1)             │
+│  REST API (FastAPI)            ●   WebSocket (real-time)            │
+│  Cloud Connectors              ●   Telemetry Monitor                │
+└─────────────────────────────────────────────────────────────────────┘
          │                         │
     WiFi / BLE               Cloud (HTTP/AWS/GCP/Azure)
          │
@@ -130,6 +150,13 @@ with `arduino-cli` (FQBN: `esp32:esp32:esp32`).
 | POST | `/api/v1/firmware/flash/{device_id}` | OTA flash a device |
 | POST | `/api/v1/ai/optimise/{device_id}` | AI-driven device optimisation |
 | POST | `/api/v1/ai/research` | AI research query |
+| POST | `/api/v1/quantum/task` | Dispatch any task to the QuantumAgent |
+| POST | `/api/v1/quantum/qaoa/{device_id}` | QAOA frequency optimisation |
+| POST | `/api/v1/quantum/qkd/{device_id}` | BB84 QKD key exchange |
+| POST | `/api/v1/quantum/grover` | Grover channel search |
+| POST | `/api/v1/quantum/qft` | QFT interference spectrum analysis |
+| POST | `/api/v1/quantum/qrng` | Generate quantum-random bytes |
+| POST | `/api/v1/quantum/entangle` | GHZ fleet entanglement sync |
 
 ---
 
@@ -213,15 +240,15 @@ python main.py --mode cli
 
 ```
 ├── orchestrator/       Core orchestrator engine
-├── agents/             Specialised agents (frequency, modulation, firmware, comms, AI)
-├── ai/                 AI automation engine and PID frequency lock controller
+├── agents/             Specialised agents (frequency, modulation, firmware, comms, AI, quantum ★)
+├── ai/                 AI automation engine, PID controller, and QuantumEngine ★
 ├── comms/              WiFi, BLE, GPS/GNSS host-side managers
 ├── firmware/           Firmware builder, OTA flasher, and ESP32 C++ templates
 ├── cloud/              Cloud connector (HTTP, AWS, GCP, Azure)
-├── api/                FastAPI REST + WebSocket server
+├── api/                FastAPI REST + WebSocket server (v2.1.0) ★
 ├── logging_system/     Structured logging and telemetry monitor
 ├── app/                React Native cross-platform mobile app
 ├── config/             YAML configuration files
-├── tests/              pytest test suite (56 tests)
+├── tests/              pytest test suite (56 + quantum tests) ★
 └── main.py             Entry point (server / demo / cli modes)
 ```

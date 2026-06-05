@@ -1,7 +1,7 @@
 {
-  "name": "MultiAgentApp",
+  "name": "PiNaCoLlAda",
   "version": "1.0.0",
-  "description": "Cross-platform mobile app for ESP32 Multi-Agent Orchestration System",
+  "description": "PiNaCoLlAda — Cross-platform mobile app for ESP32 Multi-Agent Orchestration System",
   "main": "index.js",
   "scripts": {
     "android": "react-native run-android",

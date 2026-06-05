@@ -7,6 +7,9 @@ from .modulation_agent import ModulationAgent
 from .firmware_agent import FirmwareAgent
 from .comms_agent import CommsAgent
 from .ai_agent import AIAgent
+from .quantum_agent import QuantumAgent
+from .super_nai_agent import SuperNAiAgent
+from .council_agent import CouncilAgent
 
 __all__ = [
     "FrequencyAgent",
@@ -14,4 +17,7 @@ __all__ = [
     "FirmwareAgent",
     "CommsAgent",
     "AIAgent",
+    "QuantumAgent",
+    "SuperNAiAgent",
+    "CouncilAgent",
 ]
