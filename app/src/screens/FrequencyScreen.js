@@ -9,6 +9,7 @@ import {
   TextInput, Alert,
 } from 'react-native';
 import API from '../services/api';
+import COLORS from '../theme';
 
 const BANDS = ['2.4GHz', '5GHz', '915MHz', '868MHz', '433MHz'];
 const PRESETS = [
@@ -139,6 +140,7 @@ export default function FrequencyScreen() {
         onChangeText={setTargetHz}
         keyboardType="numeric"
         placeholder="e.g. 2412000000"
+        placeholderTextColor={COLORS.textMuted}
       />
 
       {/* Actions */}
@@ -199,36 +201,38 @@ function ActionButton({ label, onPress, disabled, secondary, wide }) {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#f5f5f5' },
-  label: { fontSize: 12, fontWeight: '700', color: '#555', marginBottom: 6, textTransform: 'uppercase' },
-  sectionHeader: { fontSize: 14, fontWeight: '700', color: '#333', marginTop: 20, marginBottom: 8 },
+  container: { flex: 1, backgroundColor: COLORS.background },
+  label: { fontSize: 12, fontWeight: '700', color: COLORS.textSecondary, marginBottom: 6, textTransform: 'uppercase' },
+  sectionHeader: { fontSize: 14, fontWeight: '700', color: COLORS.greenDark, marginTop: 20, marginBottom: 8 },
   pickerWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginBottom: 14 },
   chip: {
     paddingHorizontal: 12, paddingVertical: 6,
-    borderRadius: 16, borderWidth: 1, borderColor: '#0066CC',
+    borderRadius: 16, borderWidth: 1, borderColor: COLORS.green,
+    backgroundColor: COLORS.surface,
   },
-  chipActive: { backgroundColor: '#0066CC' },
-  chipText: { fontSize: 12, color: '#0066CC' },
-  chipTextActive: { color: '#fff' },
+  chipActive: { backgroundColor: COLORS.green },
+  chipText: { fontSize: 12, color: COLORS.green },
+  chipTextActive: { color: COLORS.textOnBrand },
   preset: {
-    backgroundColor: '#fff', borderRadius: 8, padding: 10,
+    backgroundColor: COLORS.surface, borderRadius: 8, padding: 10,
     marginRight: 8, minWidth: 110, alignItems: 'center', elevation: 1,
+    borderWidth: 1, borderColor: COLORS.border,
   },
-  presetLabel: { fontSize: 11, color: '#555' },
-  presetHz: { fontSize: 14, fontWeight: '700', color: '#0066CC', marginTop: 2 },
+  presetLabel: { fontSize: 11, color: COLORS.textSecondary },
+  presetHz: { fontSize: 14, fontWeight: '700', color: COLORS.yellow, marginTop: 2 },
   input: {
-    backgroundColor: '#fff', borderRadius: 8,
-    borderWidth: 1, borderColor: '#ddd', padding: 10,
-    fontSize: 14, marginBottom: 12,
+    backgroundColor: COLORS.surface, borderRadius: 8,
+    borderWidth: 1, borderColor: COLORS.border, padding: 10,
+    fontSize: 14, marginBottom: 12, color: COLORS.textPrimary,
   },
   btnRow: { flexDirection: 'row', gap: 8, marginBottom: 8 },
   btn: {
-    flex: 1, backgroundColor: '#0066CC', borderRadius: 8,
+    flex: 1, backgroundColor: COLORS.green, borderRadius: 8,
     padding: 12, alignItems: 'center', marginBottom: 8,
   },
-  btnSecondary: { backgroundColor: '#fff', borderWidth: 1, borderColor: '#0066CC' },
+  btnSecondary: { backgroundColor: COLORS.surface, borderWidth: 1, borderColor: COLORS.green },
   btnWide: { width: '100%', flex: undefined },
   btnDisabled: { opacity: 0.5 },
-  btnText: { color: '#fff', fontWeight: '700', fontSize: 14 },
-  btnSecondaryText: { color: '#0066CC' },
+  btnText: { color: COLORS.textOnBrand, fontWeight: '700', fontSize: 14 },
+  btnSecondaryText: { color: COLORS.green },
 });

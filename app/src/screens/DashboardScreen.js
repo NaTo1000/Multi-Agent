@@ -8,6 +8,7 @@ import {
   ActivityIndicator,
 } from 'react-native';
 import API from '../services/api';
+import COLORS from '../theme';
 
 export default function DashboardScreen() {
   const [status, setStatus] = useState(null);
@@ -56,7 +57,7 @@ export default function DashboardScreen() {
   if (loading) {
     return (
       <View style={styles.center}>
-        <ActivityIndicator size="large" color="#0066CC" />
+        <ActivityIndicator size="large" color={COLORS.yellow} />
         <Text style={styles.loadingText}>Connecting to orchestrator…</Text>
       </View>
     );
@@ -67,7 +68,14 @@ export default function DashboardScreen() {
   return (
     <ScrollView
       style={styles.container}
-      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
+      refreshControl={
+        <RefreshControl
+          refreshing={refreshing}
+          onRefresh={onRefresh}
+          tintColor={COLORS.yellow}
+          colors={[COLORS.yellow]}
+        />
+      }
     >
       {/* Connection status */}
       <View style={[styles.statusBar, wsConnected ? styles.connected : styles.disconnected]}>
@@ -126,7 +134,7 @@ function DeviceRow({ device }) {
 function AgentRow({ agent }) {
   return (
     <View style={styles.row}>
-      <View style={styles.dot} />
+      <View style={[styles.dot, { backgroundColor: COLORS.yellow }]} />
       <View>
         <Text style={styles.rowTitle}>{agent.agent_type}</Text>
         <Text style={styles.rowSub}>Status: {agent.status}</Text>
@@ -143,36 +151,37 @@ function SectionHeader({ title }) {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#f5f5f5' },
-  center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
-  loadingText: { marginTop: 12, color: '#666' },
+  container: { flex: 1, backgroundColor: COLORS.background },
+  center: { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: COLORS.background },
+  loadingText: { marginTop: 12, color: COLORS.textMuted },
   statusBar: { padding: 8, alignItems: 'center' },
-  connected: { backgroundColor: '#d4edda' },
-  disconnected: { backgroundColor: '#fff3cd' },
-  statusText: { fontWeight: '600', fontSize: 13 },
+  connected: { backgroundColor: '#D6F0E0' },
+  disconnected: { backgroundColor: '#FFF8DC' },
+  statusText: { fontWeight: '600', fontSize: 13, color: COLORS.textPrimary },
   statsRow: { flexDirection: 'row', padding: 12, gap: 8 },
   card: {
-    flex: 1, backgroundColor: '#fff', borderRadius: 8,
+    flex: 1, backgroundColor: COLORS.surface, borderRadius: 10,
     padding: 12, alignItems: 'center', elevation: 2,
+    borderWidth: 1, borderColor: COLORS.border,
   },
-  cardValue: { fontSize: 28, fontWeight: 'bold', color: '#0066CC' },
-  cardTitle: { fontSize: 12, color: '#444', marginTop: 2 },
-  cardSub: { fontSize: 11, color: '#888' },
+  cardValue: { fontSize: 28, fontWeight: 'bold', color: COLORS.green },
+  cardTitle: { fontSize: 12, color: COLORS.textSecondary, marginTop: 2 },
+  cardSub: { fontSize: 11, color: COLORS.textMuted },
   sectionHeader: {
-    fontSize: 14, fontWeight: '700', color: '#333',
+    fontSize: 14, fontWeight: '700', color: COLORS.greenDark,
     paddingHorizontal: 16, paddingTop: 12, paddingBottom: 4,
     textTransform: 'uppercase', letterSpacing: 0.5,
   },
   row: {
     flexDirection: 'row', alignItems: 'center',
-    backgroundColor: '#fff', paddingHorizontal: 16,
+    backgroundColor: COLORS.surface, paddingHorizontal: 16,
     paddingVertical: 12, marginBottom: 1,
   },
-  dot: { width: 10, height: 10, borderRadius: 5, backgroundColor: '#aaa', marginRight: 12 },
-  dotGreen: { backgroundColor: '#28a745' },
-  dotRed: { backgroundColor: '#dc3545' },
-  rowTitle: { fontSize: 14, fontWeight: '600', color: '#222' },
-  rowSub: { fontSize: 12, color: '#777', marginTop: 1 },
-  rowRight: { marginLeft: 'auto', fontSize: 12, color: '#555' },
-  empty: { textAlign: 'center', color: '#999', padding: 24 },
+  dot: { width: 10, height: 10, borderRadius: 5, backgroundColor: COLORS.textMuted, marginRight: 12 },
+  dotGreen: { backgroundColor: COLORS.success },
+  dotRed: { backgroundColor: COLORS.danger },
+  rowTitle: { fontSize: 14, fontWeight: '600', color: COLORS.textPrimary },
+  rowSub: { fontSize: 12, color: COLORS.textMuted, marginTop: 1 },
+  rowRight: { marginLeft: 'auto', fontSize: 12, color: COLORS.textSecondary },
+  empty: { textAlign: 'center', color: COLORS.textMuted, padding: 24 },
 });
