@@ -16,6 +16,14 @@ pyserial-asyncio>=0.6
 # Async DNS resolution
 aiodns>=3.0.0
 
+# Proxy support
+PySocks>=1.7.1                   # SOCKS4/5 and HTTP proxy (sync)
+python-socks[asyncio]>=2.0.0     # Async SOCKS proxy client
+aiohttp-socks>=0.8.0             # SOCKS proxy support for async HTTP
+
+# VPN support
+openvpn3>=0.1.0                  # OpenVPN3 Python bindings
+
 # Cloud integration (optional — install only what you need)
 # boto3>=1.34.0                    # AWS IoT
 # google-cloud-pubsub>=2.18.0      # GCP Pub/Sub
