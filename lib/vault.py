@@ -76,12 +76,12 @@ def _load_secrets_file(path: Path) -> Dict[str, Any]:
         with path.open(encoding="utf-8") as fh:
             data = yaml.safe_load(fh) or {}
         if not isinstance(data, dict):
-            logger.warning("vault: %s did not contain a YAML mapping — ignored", path)
+            logger.warning("vault: secrets file did not contain a YAML mapping — ignored")
             return {}
-        logger.debug("vault: loaded secrets from %s", path)
+        logger.debug("vault: loaded secrets file")
         return data
-    except Exception as exc:  # pylint: disable=broad-except
-        logger.warning("vault: could not load secrets file %s: %s", path, exc)
+    except Exception:  # pylint: disable=broad-except
+        logger.warning("vault: could not load secrets file (check path and YAML syntax)")
         return {}
 
 

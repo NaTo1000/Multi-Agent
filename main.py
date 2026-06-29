@@ -215,8 +215,9 @@ def main():
         description="Multi-Agent ESP32 Orchestration System"
     )
     parser.add_argument(
-        "--mode", choices=["server", "demo", "cli"], default="server",
-        help="Execution mode (default: server)"
+        "--mode", choices=["server", "demo", "cli", "multi-agent"],
+        default="server",
+        help="Execution mode (default: server)",
     )
     parser.add_argument("--host", default="0.0.0.0", help="API server bind host")
     parser.add_argument("--port", type=int, default=8000, help="API server port")
@@ -241,6 +242,9 @@ def main():
         asyncio.run(run_demo(orchestrator))
     elif args.mode == "cli":
         asyncio.run(run_cli(orchestrator))
+    elif args.mode == "multi-agent":
+        from cli.multi_agent_cli import run_multi_agent
+        asyncio.run(run_multi_agent(orchestrator, config))
 
 
 if __name__ == "__main__":
