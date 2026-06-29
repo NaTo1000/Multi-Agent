@@ -43,17 +43,22 @@ def build_orchestrator(config: dict):
 
 
 def load_config(config_path: str) -> dict:
-    """Load YAML config if available, else return empty dict."""
+    """Load YAML config, then overlay secrets from the vault."""
+    from lib.vault import load_secrets
+
     try:
         import yaml
         with open(config_path, encoding="utf-8") as f:
-            return yaml.safe_load(f) or {}
+            config = yaml.safe_load(f) or {}
     except FileNotFoundError:
         logger.info("Config file not found at %s — using defaults", config_path)
-        return {}
+        config = {}
     except ImportError:
         logger.warning("PyYAML not installed — using defaults")
-        return {}
+        config = {}
+
+    load_secrets(config)
+    return config
 
 
 # ------------------------------------------------------------------

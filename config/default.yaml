@@ -1,4 +1,7 @@
 # Multi-Agent ESP32 Orchestration System
+# Secret keys (api_key, project_id, azure_connection_string, …) are NOT stored here.
+# Copy config/secrets.yaml.example → config/secrets.yaml and fill in your values,
+# or export the corresponding environment variables.  See lib/vault.py for details.
 
 # Core settings
 health_check_interval: 10       # seconds between device health-checks
@@ -39,22 +42,18 @@ ai_agent:
     providers:
       watsonx:
         endpoint: ""             # e.g. https://us-south.ml.cloud.ibm.com/ml/v1/text/generation
-        api_key: ""              # IBM Cloud IAM API key
-        project_id: ""           # watsonx project ID
+        project_id: ""           # watsonx project ID  (or set via WATSONX_PROJECT_ID)
         model_id: "ibm/granite-13b-instruct-v2"
         max_tokens: 512
       kimi:
         endpoint: "https://api.moonshot.cn/v1"
-        api_key: ""              # Moonshot API key
         model: "kimi-2.6"
         max_tokens: 512
       kai9000:
         endpoint: ""             # Kai-9000 inference URL
-        api_key: ""
         model: ""
       manus:
         endpoint: ""             # e.g. https://api.manus.im/v1
-        api_key: ""
         agent_id: ""
 
 # API server
