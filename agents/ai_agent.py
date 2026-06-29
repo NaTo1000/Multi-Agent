@@ -18,6 +18,7 @@ from typing import Any, Deque, Dict, List, Optional
 
 from orchestrator.agent import AgentBase
 from orchestrator.device import ESP32Device
+from ai.chaimera3sp import CHAiMERA3sp
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +49,8 @@ class AIAgent(AgentBase):
         self._rssi_windows: Dict[str, Deque[float]] = {}
         # Per-device recommendation cache
         self._recommendations: Dict[str, Dict[str, Any]] = {}
+        # CHAiMERA3sp multi-provider AI router
+        self._chaimera = CHAiMERA3sp(self.config.get("chaimera3sp"))
 
     # ------------------------------------------------------------------
     # AgentBase interface
@@ -271,19 +274,34 @@ class AIAgent(AgentBase):
 
     async def _research(self, params: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Query a configured LLM / cloud AI endpoint for research-grade
-        recommendations on frequency, modulation, or firmware strategy.
-        Falls back to built-in heuristics when no cloud endpoint is set.
+        Query a configured AI provider (via CHAiMERA3sp) or a legacy cloud AI
+        endpoint for research-grade recommendations on frequency, modulation, or
+        firmware strategy.  Falls back to built-in heuristics when neither is set.
         """
         query = params.get("query", "")
-        endpoint = self.config.get("ai_research_endpoint")
+        context = params.get("context", {})
 
+        # Try CHAiMERA3sp providers first
+        if self._chaimera.configured_providers:
+            try:
+                provider = params.get("provider")  # optional explicit provider override
+                result = await self._chaimera.query(
+                    query, context=context, provider=provider
+                )
+                result.setdefault("query", query)
+                result.setdefault("source", "chaimera3sp")
+                return result
+            except Exception as exc:  # pylint: disable=broad-except
+                logger.warning("CHAiMERA3sp research failed: %s — trying fallback", exc)
+
+        # Legacy single-endpoint fallback
+        endpoint = self.config.get("ai_research_endpoint")
         if endpoint:
             try:
                 import json
                 import urllib.request
 
-                body = json.dumps({"query": query, "context": params.get("context", {})}).encode()
+                body = json.dumps({"query": query, "context": context}).encode()
                 req = urllib.request.Request(
                     endpoint, data=body, headers={"Content-Type": "application/json"}
                 )

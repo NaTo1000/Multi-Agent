@@ -26,7 +26,36 @@ comms_agent:
 
 # AI agent
 ai_agent:
-  ai_research_endpoint: ""       # Optional LLM/cloud AI endpoint
+  ai_research_endpoint: ""       # Optional legacy LLM/cloud AI endpoint
+
+  # CHAiMERA3sp — Composite Hybrid AI Multi-Engine Routing Architecture
+  chaimera3sp:
+    strategy: first              # first | fallback | broadcast
+    priority:
+      - watsonx
+      - kimi
+      - kai9000
+      - manus
+    providers:
+      watsonx:
+        endpoint: ""             # e.g. https://us-south.ml.cloud.ibm.com/ml/v1/text/generation
+        api_key: ""              # IBM Cloud IAM API key
+        project_id: ""           # watsonx project ID
+        model_id: "ibm/granite-13b-instruct-v2"
+        max_tokens: 512
+      kimi:
+        endpoint: "https://api.moonshot.cn/v1"
+        api_key: ""              # Moonshot API key
+        model: "kimi-2.6"
+        max_tokens: 512
+      kai9000:
+        endpoint: ""             # Kai-9000 inference URL
+        api_key: ""
+        model: ""
+      manus:
+        endpoint: ""             # e.g. https://api.manus.im/v1
+        api_key: ""
+        agent_id: ""
 
 # API server
 server:
