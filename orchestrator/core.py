@@ -14,6 +14,7 @@ from typing import Any, Callable, Dict, List, Optional
 from .agent import AgentBase, AgentStatus
 from .device import ESP32Device, DeviceStatus
 from .scheduler import TaskScheduler
+from .ratings import RatingSystem
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +38,7 @@ class Orchestrator:
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._health_check_interval = self.config.get("health_check_interval", 10)
         self._task_results: Dict[str, Any] = {}
+        self.ratings = RatingSystem()
         logger.info("Orchestrator initialised")
 
     # ------------------------------------------------------------------
@@ -129,6 +131,22 @@ class Orchestrator:
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
         self._emit_event("task_completed", self._task_results[task_id])
+
+        # Peer rating: all other agents rate the agent that just completed a task
+        peer_agents = [
+            {"agent_id": a.agent_id, "agent_type": a.agent_type}
+            for a in self._agents.values()
+            if a.agent_id != agent_id
+        ]
+        if peer_agents:
+            self.ratings.submit_peer_ratings(
+                performing_agent_id=agent_id,
+                performing_agent_type=agent.agent_type,
+                task=task,
+                peer_agents=peer_agents,
+                result=result,
+            )
+
         return task_id
 
     async def broadcast_task(
@@ -203,6 +221,13 @@ class Orchestrator:
                     await device.ping()
                 except Exception as exc:  # pylint: disable=broad-except
                     logger.warning("Health-check failed for %s: %s", device.device_id, exc)
+
+    def get_ratings_leaderboard(self) -> List[Dict[str, Any]]:
+        """Return the peer-ratings leaderboard for all agents."""
+        # Ensure every registered agent has a tally (even those not yet rated)
+        for agent in self._agents.values():
+            self.ratings.ensure_agent(agent.agent_id, agent.agent_type)
+        return self.ratings.get_leaderboard()
 
     # ------------------------------------------------------------------
     # Status summary

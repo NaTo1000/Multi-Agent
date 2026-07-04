@@ -50,3 +50,7 @@ config/secrets.yaml
 
 # CodeQL
 _codeql_detected_source_root
+node_modules/
+.next/
+tsconfig.tsbuildinfo
+pnpm-workspace.yaml
