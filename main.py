@@ -229,6 +229,13 @@ def main():
         choices=["DEBUG", "INFO", "WARNING", "ERROR"],
     )
     parser.add_argument("--log-dir", default=None, help="Directory for log files")
+    parser.add_argument(
+        "--prompt", "-p", default=None, metavar="PROMPT",
+        help=(
+            "One-shot inference prompt (--mode multi-agent only). "
+            "Runs a single non-interactive inference pass and exits."
+        ),
+    )
     args = parser.parse_args()
 
     setup_logging(level=args.log_level, log_dir=args.log_dir)
@@ -244,7 +251,7 @@ def main():
         asyncio.run(run_cli(orchestrator))
     elif args.mode == "multi-agent":
         from cli.multi_agent_cli import run_multi_agent
-        asyncio.run(run_multi_agent(orchestrator, config))
+        asyncio.run(run_multi_agent(orchestrator, config, prompt=args.prompt))
 
 
 if __name__ == "__main__":

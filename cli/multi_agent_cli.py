@@ -483,12 +483,22 @@ class MultiAgentSession:
 # Interactive loop
 # ---------------------------------------------------------------------------
 
-async def run_multi_agent(orchestrator: Any, config: Dict[str, Any]) -> None:
+async def run_multi_agent(
+    orchestrator: Any,
+    config: Dict[str, Any],
+    prompt: Optional[str] = None,
+) -> None:
     """
-    Start the multi-agent interactive CLI session.
+    Start the multi-agent CLI session.
 
-    Launches the orchestrator then loops reading prompts until the user
-    types ``exit`` or sends EOF.
+    If *prompt* is provided the session runs a single non-interactive
+    inference pass and exits.  Otherwise an interactive read-eval loop
+    is started (the original behaviour).
+
+    Args:
+        orchestrator: The wired-up :class:`Orchestrator` instance.
+        config:       Full application config dict.
+        prompt:       Optional one-shot prompt for non-interactive inference.
     """
     from logging_system.logger import setup_logging  # noqa: F401  (already set up by main.py)
 
@@ -496,6 +506,17 @@ async def run_multi_agent(orchestrator: Any, config: Dict[str, Any]) -> None:
 
     await orchestrator.start()
 
+    # ------------------------------------------------------------------
+    # Non-interactive: single inference pass then exit
+    # ------------------------------------------------------------------
+    if prompt is not None:
+        await session.process(prompt)
+        await orchestrator.stop()
+        return
+
+    # ------------------------------------------------------------------
+    # Interactive loop
+    # ------------------------------------------------------------------
     print()
     print("  ╔══════════════════════════════════════════════════════╗")
     print("  ║        Multi-Agent CLI  —  ESP32 Orchestration       ║")
@@ -509,22 +530,22 @@ async def run_multi_agent(orchestrator: Any, config: Dict[str, Any]) -> None:
         try:
             # Run input() in a thread so the event loop stays unblocked
             loop = asyncio.get_event_loop()
-            prompt = await loop.run_in_executor(None, lambda: input("  ▸ ").strip())
+            line = await loop.run_in_executor(None, lambda: input("  ▸ ").strip())
         except (KeyboardInterrupt, EOFError):
             break
 
-        if not prompt:
+        if not line:
             continue
-        if prompt.lower() in {"exit", "quit", "q"}:
+        if line.lower() in {"exit", "quit", "q"}:
             break
-        if prompt.lower() == "help":
+        if line.lower() == "help":
             _print_help()
             continue
-        if prompt.lower() == "workers":
+        if line.lower() == "workers":
             _print_workers(session._workers)
             continue
 
-        await session.process(prompt)
+        await session.process(line)
 
     await orchestrator.stop()
     print("\n  Goodbye.\n")
@@ -569,6 +590,13 @@ def main() -> None:
                         help="Path to YAML config (default: config/default.yaml)")
     parser.add_argument("--log-level", default="WARNING",
                         choices=["DEBUG", "INFO", "WARNING", "ERROR"])
+    parser.add_argument(
+        "--prompt", "-p", default=None, metavar="PROMPT",
+        help=(
+            "Run a single non-interactive inference pass with PROMPT and exit. "
+            "Omit to start the interactive session."
+        ),
+    )
     args = parser.parse_args()
 
     setup_logging(level=args.log_level)
@@ -580,7 +608,7 @@ def main() -> None:
 
     config = load_config(args.config)
     orchestrator = build_orchestrator(config)
-    asyncio.run(run_multi_agent(orchestrator, config))
+    asyncio.run(run_multi_agent(orchestrator, config, prompt=args.prompt))
 
 
 if __name__ == "__main__":
