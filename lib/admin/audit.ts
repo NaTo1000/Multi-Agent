@@ -21,6 +21,8 @@ export type AuditAction =
   | "toggle_self_repair"
   | "execute_command"
   | "update_config"
+  | "switch_model"
+  | "update_model_params"
 
 export type AuditResult = "success" | "failure" | "denied"
 
