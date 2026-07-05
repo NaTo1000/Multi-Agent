@@ -1,16 +1,25 @@
 """
 User Behavioural Profile — per-user rolling state for personalised AI responses.
 
-Stores an in-memory profile for each user that accumulates:
-- Recent emotional snapshots
-- Vocabulary and prompt-length preferences
-- Ambiguity rate (fraction of prompts that were classified as ambiguous)
-- Dominant tone trend across the conversation
-- Inferred preferred explanation style
+Statistical foundations
+-----------------------
+All metrics stored and derived in this module use elementary descriptive
+statistics (arithmetic mean, frequency counts, ratio) applied to the
+observation window.  No modelling assumptions beyond what the data directly
+supports are made.
 
-The profile is used by :class:`~ai.hiai.HiAiModule` to inject rapport
-context into every :class:`~ai.chaimera3sp.CHAiMERA3sp` query, subtly
-adapting the AI's tone and word choices to the individual user.
+- **Dominant tone**: mode of the NRC EmoLex category labels across the rolling
+  snapshot window — the most frequently occurring category.
+- **Average valence**: arithmetic mean of ordinal valence scores
+  (positive=+1, neutral=0, negative=−1) across the window, with a
+  ±0.2 hysteresis band around zero to avoid spurious polarity flips.
+- **Ambiguity rate**: simple proportion — ambiguous prompts / total prompts.
+  This is a binomial proportion and is therefore well-defined for any n ≥ 1.
+- **Average prompt length**: arithmetic mean of token counts (whitespace-
+  delimited words), used as a proxy for the user's preferred verbosity level.
+
+Profile data is derived exclusively from text interactions.  No biometric,
+physiological, or real-world sensor data is collected or modelled.
 """
 
 from __future__ import annotations
@@ -25,7 +34,8 @@ from .emotional_state import EmotionalSnapshot
 
 logger = logging.getLogger(__name__)
 
-# How many emotional snapshots to keep per user
+# Rolling window size — enough history for stable mode/mean estimates without
+# over-weighting the distant past.
 _SNAPSHOT_HISTORY_SIZE = 50
 
 
@@ -37,47 +47,47 @@ _SNAPSHOT_HISTORY_SIZE = 50
 @dataclass
 class UserProfile:
     """
-    Rolling behavioural profile for a single user.
-
-    All data is derived exclusively from text-interaction patterns.
+    Rolling behavioural profile for a single user, built exclusively from
+    text-interaction observations.
     """
 
     user_id: str
-    # Circular buffer of emotional snapshots, most recent last
+    # Circular buffer of emotional snapshots, oldest evicted first
     snapshots: Deque[EmotionalSnapshot] = field(
         default_factory=lambda: deque(maxlen=_SNAPSHOT_HISTORY_SIZE)
     )
-    # Total prompts seen
     prompt_count: int = 0
-    # Prompts classified as ambiguous
     ambiguous_count: int = 0
-    # Accumulated word counts for vocabulary size estimation
     total_words: int = 0
-    # Preferred explanation style: "brief" | "detailed" | "unknown"
+    # "brief" | "moderate" | "detailed" — derived from avg_prompt_length
     explanation_style: str = "unknown"
-    # ISO-8601 timestamp of first interaction
     created_at: str = field(
         default_factory=lambda: datetime.now(timezone.utc).isoformat()
     )
-    # ISO-8601 timestamp of last update
     updated_at: str = field(
         default_factory=lambda: datetime.now(timezone.utc).isoformat()
     )
 
     # ------------------------------------------------------------------
-    # Derived properties
+    # Derived metrics — all computed from raw observation counts
     # ------------------------------------------------------------------
 
     @property
     def ambiguity_rate(self) -> float:
-        """Fraction of prompts that were ambiguous (0.0 – 1.0)."""
+        """
+        Proportion of prompts classified as ambiguous (binomial proportion).
+        Returns 0.0 when no prompts have been observed.
+        """
         if self.prompt_count == 0:
             return 0.0
         return self.ambiguous_count / self.prompt_count
 
     @property
     def dominant_tone(self) -> str:
-        """Most frequently occurring tone across recent snapshots."""
+        """
+        Mode of NRC EmoLex category labels across the snapshot window.
+        Returns "neutral" when the window is empty.
+        """
         if not self.snapshots:
             return "neutral"
         counts: Dict[str, int] = {}
@@ -88,22 +98,26 @@ class UserProfile:
     @property
     def avg_valence(self) -> str:
         """
-        Average valence of the last N snapshots.
-        Returns "positive", "negative", or "neutral".
+        Arithmetic mean of ordinal valence scores across the snapshot window
+        (positive=+1, neutral=0, negative=−1), with ±0.2 hysteresis.
+        Returns "neutral" when the window is empty.
         """
         if not self.snapshots:
             return "neutral"
-        scores = {"positive": 1, "neutral": 0, "negative": -1}
-        avg = sum(scores.get(s.valence, 0) for s in self.snapshots) / len(self.snapshots)
-        if avg > 0.2:
+        ordinal = {"positive": 1, "neutral": 0, "negative": -1}
+        mean = sum(ordinal.get(s.valence, 0) for s in self.snapshots) / len(self.snapshots)
+        if mean > 0.2:
             return "positive"
-        if avg < -0.2:
+        if mean < -0.2:
             return "negative"
         return "neutral"
 
     @property
     def avg_prompt_length(self) -> float:
-        """Average words per prompt."""
+        """
+        Arithmetic mean of whitespace-delimited word counts per prompt.
+        Returns 0.0 before any prompts are recorded.
+        """
         if self.prompt_count == 0:
             return 0.0
         return self.total_words / self.prompt_count
@@ -129,22 +143,18 @@ class UserProfile:
 
 class UserProfileStore:
     """
-    In-memory store of :class:`UserProfile` instances.
+    In-memory store of :class:`UserProfile` instances, keyed by ``user_id``.
 
-    All methods are synchronous and thread-safe for single-threaded async
+    All operations are synchronous and re-entrant for single-threaded async
     use.  To persist profiles across restarts, subclass and override
-    ``get_or_create`` / ``_save``.
+    ``get_or_create`` and add a ``_save`` hook.
     """
 
     def __init__(self) -> None:
         self._profiles: Dict[str, UserProfile] = {}
 
-    # ------------------------------------------------------------------
-    # CRUD
-    # ------------------------------------------------------------------
-
     def get_or_create(self, user_id: str) -> UserProfile:
-        """Return the existing profile for *user_id*, or create a blank one."""
+        """Return the existing profile for *user_id*, creating one if absent."""
         if user_id not in self._profiles:
             self._profiles[user_id] = UserProfile(user_id=user_id)
             logger.debug("Created new user profile: %s", user_id)
@@ -158,12 +168,18 @@ class UserProfileStore:
         was_ambiguous: bool,
     ) -> UserProfile:
         """
-        Append an :class:`EmotionalSnapshot` and update rolling statistics.
+        Append *snapshot* and update rolling statistics for *user_id*.
+
+        Explanation style is derived from ``avg_prompt_length`` using
+        empirically common breakpoints for conversational interfaces:
+        - < 8 words  → "brief"
+        - 8–25 words → "moderate"
+        - > 25 words → "detailed"
 
         Args:
-            user_id:       The user whose profile to update.
-            snapshot:      The inferred emotional state for this turn.
-            prompt:        The raw user prompt (used for length statistics).
+            user_id:       Target user.
+            snapshot:      Inferred :class:`EmotionalSnapshot` for this turn.
+            prompt:        Raw user prompt (for word-count accumulation).
             was_ambiguous: Whether this prompt was classified as ambiguous.
 
         Returns:
@@ -177,7 +193,6 @@ class UserProfileStore:
         profile.total_words += len(prompt.split())
         profile.updated_at = datetime.now(timezone.utc).isoformat()
 
-        # Infer preferred explanation style from prompt length trend
         avg = profile.avg_prompt_length
         if avg < 8:
             profile.explanation_style = "brief"
@@ -187,7 +202,7 @@ class UserProfileStore:
             profile.explanation_style = "moderate"
 
         logger.debug(
-            "Updated profile %s | tone=%s | ambiguity_rate=%.2f",
+            "Updated profile %s | tone=%s | ambiguity_rate=%.3f",
             user_id,
             profile.dominant_tone,
             profile.ambiguity_rate,
@@ -196,11 +211,11 @@ class UserProfileStore:
 
     def get_rapport_context(self, user_id: str) -> Dict[str, Any]:
         """
-        Return a compact context dict that can be injected into a
-        :class:`~ai.chaimera3sp.CHAiMERA3sp` prompt to personalise the
-        AI's tone and verbosity for this user.
+        Return a compact, serialisable context dict for injection into
+        :class:`~ai.chaimera3sp.CHAiMERA3sp` prompts.
 
-        If the user has no profile yet, returns a neutral/default context.
+        All values are directly derived from observed interaction data.
+        Returns neutral defaults when no profile exists.
         """
         profile = self._profiles.get(user_id)
         if profile is None:
@@ -226,7 +241,7 @@ class UserProfileStore:
         }
 
     def list_users(self) -> List[str]:
-        """Return all known user IDs."""
+        """Return all user IDs with active profiles."""
         return list(self._profiles.keys())
 
     def get_profile(self, user_id: str) -> Optional[UserProfile]:
