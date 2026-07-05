@@ -15,11 +15,27 @@ When a user enters a prompt the session runs three phases:
   3. **Summary** — results are printed per task; per-worker stats show how
      many tasks each worker completed as primary handler vs. as a helper.
 
+Short-key prompting
+-------------------
+Instead of a full natural-language sentence you can type one or more
+space-separated *short keys* to trigger specific tasks directly.  Keys
+can be combined freely — the system queues all matched tasks in a single
+pass:
+
+    ▸ f          → read frequency
+    ▸ w b        → wifi scan + BLE scan
+    ▸ f m o      → frequency + modulation + auto-optimise
+    ▸ ?          → show the full key reference table
+
+Type ``help`` or ``?`` inside the interactive session to see the complete
+key reference.
+
 Usage::
 
-    python main.py --mode multi-agent        # interactive (recommended)
-    python -m cli.multi_agent_cli            # direct entry
-    python -m cli.multi_agent_cli --config config/default.yaml
+    python main.py --mode multi-agent                    # interactive
+    python main.py --mode multi-agent --prompt "w b d"  # one-shot via short keys
+    python -m cli.multi_agent_cli                        # direct entry
+    python -m cli.multi_agent_cli -p "research lora"     # one-shot NL
 """
 
 import asyncio
@@ -200,6 +216,99 @@ def decompose_prompt(prompt: str) -> List[WorkTask]:
 
 
 # ---------------------------------------------------------------------------
+# Short-key prompting system
+# ---------------------------------------------------------------------------
+# Each entry: key → (task_name, agent_type, description, params)
+# Keys are intentionally mnemonic: first letter of the primary word, with
+# two-character keys used when the initial would be ambiguous (fw, ft, bl).
+
+SHORT_KEYS: Dict[str, tuple] = {
+    # Frequency
+    "f":  ("get_frequency",       "frequency_agent",  "Read current operating frequency",
+           {}),
+    "ft": ("fine_tune",           "frequency_agent",  "Fine-tune frequency for best RSSI",
+           {"step_hz": 500_000, "iterations": 5}),
+    # Modulation
+    "m":  ("get_scheme",          "modulation_agent", "Get current modulation scheme",
+           {}),
+    # Firmware
+    "fw": ("build",               "firmware_agent",   "Build firmware image",
+           {"template": "base", "features": ["wifi", "ble"], "version": "auto"}),
+    # Comms
+    "w":  ("wifi_scan",           "comms_agent",      "Scan for WiFi networks",
+           {}),
+    "bl": ("ble_scan",            "comms_agent",      "Scan BLE neighbourhood",
+           {"duration_sec": 3}),
+    "g":  ("get_gps",             "comms_agent",      "Get GPS fix",
+           {}),
+    "c":  ("cloud_push",          "comms_agent",      "Push telemetry to cloud",
+           {}),
+    "d":  ("diagnostics",         "comms_agent",      "Run device diagnostics",
+           {}),
+    # AI
+    "o":  ("auto_optimise",       "ai_agent",         "Auto-optimise frequency & modulation",
+           {}),
+    "i":  ("detect_interference", "ai_agent",         "Detect RF interference",
+           {}),
+    "a":  ("anomaly_detect",      "ai_agent",         "Run anomaly detection on telemetry",
+           {}),
+    "r":  ("recommend_config",    "ai_agent",         "Generate configuration recommendations",
+           {}),
+    "q?": ("research",            "ai_agent",         "AI research / natural-language answer",
+           {}),
+}
+
+# Human-readable group ordering used by the help table
+_KEY_GROUPS: List[tuple] = [
+    ("Frequency",  ["f", "ft"]),
+    ("Modulation", ["m"]),
+    ("Firmware",   ["fw"]),
+    ("Comms",      ["w", "bl", "g", "c", "d"]),
+    ("AI",         ["o", "i", "a", "r"]),
+]
+
+
+def resolve_short_keys(line: str) -> Optional[List[WorkTask]]:
+    """
+    Try to interpret *line* as a space-separated sequence of short keys.
+
+    Returns a list of :class:`WorkTask` objects when **every** whitespace-
+    separated token in *line* is a valid key in :data:`SHORT_KEYS`.  Returns
+    ``None`` when any token is unrecognised (the caller should fall back to
+    natural-language matching via :func:`decompose_prompt`).
+
+    Duplicate keys are silently de-duplicated; order is preserved.
+    """
+    tokens = line.lower().split()
+    if not tokens:
+        return None
+
+    tasks: List[WorkTask] = []
+    seen_names: Set[str] = set()
+
+    for token in tokens:
+        entry = SHORT_KEYS.get(token)
+        if entry is None:
+            return None   # unknown token → fall through to NL matching
+        task_name, agent_type, description, params = entry
+        if task_name in seen_names:
+            continue      # de-duplicate within a single input line
+        extra: Dict[str, Any] = {}
+        if agent_type == "ai_agent":
+            extra = {"query": line}
+        tasks.append(WorkTask(
+            task_id=str(uuid.uuid4())[:8],
+            name=task_name,
+            agent_type=agent_type,
+            params={**params, **extra},
+            description=description,
+        ))
+        seen_names.add(task_name)
+
+    return tasks or None
+
+
+# ---------------------------------------------------------------------------
 # Deliberation
 # ---------------------------------------------------------------------------
 
@@ -284,8 +393,14 @@ class MultiAgentSession:
     # ------------------------------------------------------------------
 
     async def process(self, prompt: str) -> None:
-        """Run a full prompt → deliberate → execute → summarise cycle."""
-        tasks = decompose_prompt(prompt)
+        """Run a full prompt → deliberate → execute → summarise cycle.
+
+        Input is first tested against the short-key table
+        (:func:`resolve_short_keys`).  If every space-separated token is a
+        valid key the corresponding tasks are queued directly.  Otherwise
+        natural-language keyword matching (:func:`decompose_prompt`) is used.
+        """
+        tasks = resolve_short_keys(prompt) or decompose_prompt(prompt)
         print()
         self._print_skills_registry()
         self._print_deliberation(tasks)
@@ -522,7 +637,7 @@ async def run_multi_agent(
     print("  ║        Multi-Agent CLI  —  ESP32 Orchestration       ║")
     print("  ║                                                      ║")
     print("  ║  Workers   : " + f"{len(session._workers)}" + " active" + " " * (38 - len(str(len(session._workers)))) + "║")  # noqa: E501
-    print("  ║  Type 'help' for examples  •  'exit' to quit         ║")
+    print("  ║  Type '?' for short keys  •  'exit' to quit         ║")
     print("  ╚══════════════════════════════════════════════════════╝")
     print()
 
@@ -538,7 +653,7 @@ async def run_multi_agent(
             continue
         if line.lower() in {"exit", "quit", "q"}:
             break
-        if line.lower() == "help":
+        if line.lower() in {"help", "?"}:
             _print_help()
             continue
         if line.lower() == "workers":
@@ -552,17 +667,50 @@ async def run_multi_agent(
 
 
 def _print_help() -> None:
+    """Print the short-key reference table and natural-language examples."""
+    W = 58   # box inner width
+
+    def _box(title: str) -> str:
+        return f"  ┌─ {title} {'─' * max(0, W - len(title) - 4)}┐"
+
+    def _box_end() -> str:
+        return f"  └{'─' * (W - 1)}┘"
+
+    def _row(key: str, desc: str) -> None:
+        line = f"  │  {key:<4s}  {desc}"
+        pad  = W - len(line) + 2   # +2 for leading "  "
+        print(line + " " * max(0, pad) + "│")
+
+    def _sep() -> None:
+        print(f"  │{'─' * (W - 1)}│")
+
     print()
-    print("  Example prompts:")
-    print("    • research best modulation for long-range ESP32")
-    print("    • scan wifi and check diagnostics")
-    print("    • optimise frequency and detect interference")
-    print("    • build firmware and push telemetry to cloud")
-    print("    • analyse anomalies and recommend config")
+    print(_box("Short-Key Reference"))
+    for group_name, keys in _KEY_GROUPS:
+        _sep()
+        print(f"  │  {group_name:<{W - 3}}│")
+        for key in keys:
+            entry = SHORT_KEYS.get(key)
+            if entry:
+                _row(key, entry[2])
+    print(_box_end())
+
     print()
-    print("  Commands:")
-    print("    workers   — list active workers and their skills")
-    print("    exit      — quit the CLI")
+    print("  Combine keys freely (space-separated):")
+    print("    ▸ f m          — frequency + modulation")
+    print("    ▸ w bl d       — wifi + BLE + diagnostics")
+    print("    ▸ f ft m o     — freq + fine-tune + modulation + optimise")
+    print("    ▸ i a r        — interference + anomaly + recommendations")
+    print()
+    print("  Natural-language prompts are also accepted:")
+    print("    ▸ research best modulation for long-range ESP32")
+    print("    ▸ scan wifi and check diagnostics")
+    print("    ▸ optimise frequency and detect interference")
+    print()
+    print("  Session commands:")
+    print("    workers  — list active workers and their skills")
+    print("    ?        — show this key reference")
+    print("    exit     — quit the CLI")
     print()
 
 
