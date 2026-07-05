@@ -8,11 +8,13 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from cli.multi_agent_cli import (
     SKILLS_REGISTRY,
+    SHORT_KEYS,
     TaskStatus,
     WorkTask,
     Worker,
     decompose_prompt,
     deliberate,
+    resolve_short_keys,
     MultiAgentSession,
 )
 
@@ -225,3 +227,71 @@ class TestMultiAgentSession:
         await session._execute(tasks)
         total = sum(w.tasks_completed + w.tasks_helped for w in session._workers)
         assert total == len(tasks)
+
+
+# ---------------------------------------------------------------------------
+# resolve_short_keys — full series keys (s / ss / sss)
+# ---------------------------------------------------------------------------
+
+class TestFullSeriesShortKeys:
+    def test_s_key_resolves_to_full_series_single_pass(self):
+        tasks = resolve_short_keys("s")
+        assert tasks is not None
+        assert len(tasks) == 1
+        task = tasks[0]
+        assert task.name == "full_series"
+        assert task.params["passes"] == 1
+
+    def test_ss_key_resolves_to_full_series_double_pass(self):
+        tasks = resolve_short_keys("ss")
+        assert tasks is not None
+        assert len(tasks) == 1
+        task = tasks[0]
+        assert task.name == "full_series"
+        assert task.params["passes"] == 2
+
+    def test_sss_key_resolves_to_full_series_triple_pass(self):
+        tasks = resolve_short_keys("sss")
+        assert tasks is not None
+        assert len(tasks) == 1
+        task = tasks[0]
+        assert task.name == "full_series"
+        assert task.params["passes"] == 3
+
+    def test_s_key_agent_type_is_ai_agent(self):
+        for key in ("s", "ss", "sss"):
+            tasks = resolve_short_keys(key)
+            assert tasks is not None
+            assert tasks[0].agent_type == "ai_agent"
+
+    def test_series_keys_present_in_short_keys_table(self):
+        for key in ("s", "ss", "sss"):
+            assert key in SHORT_KEYS, f"Key '{key}' missing from SHORT_KEYS"
+
+    def test_s_combined_with_other_keys(self):
+        """s can be combined with other short keys in a single command."""
+        tasks = resolve_short_keys("f s")
+        assert tasks is not None
+        names = [t.name for t in tasks]
+        assert "get_frequency" in names
+        assert "full_series" in names
+
+    def test_duplicate_series_key_deduplicated(self):
+        """Typing 's s' deduplicates to a single full_series task."""
+        tasks = resolve_short_keys("s s")
+        assert tasks is not None
+        series_tasks = [t for t in tasks if t.name == "full_series"]
+        assert len(series_tasks) == 1
+
+    def test_ss_and_s_deduplicate_to_first_seen(self):
+        """If both s and ss appear, only the first is kept (same task name)."""
+        tasks = resolve_short_keys("s ss")
+        assert tasks is not None
+        series_tasks = [t for t in tasks if t.name == "full_series"]
+        assert len(series_tasks) == 1
+        # The first token 's' with passes=1 wins
+        assert series_tasks[0].params["passes"] == 1
+
+    def test_unknown_key_still_returns_none(self):
+        assert resolve_short_keys("xyz") is None
+

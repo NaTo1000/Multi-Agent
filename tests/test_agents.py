@@ -170,6 +170,73 @@ async def test_ai_anomaly_no_device():
     await agent.stop()
 
 
+@pytest.mark.asyncio
+async def test_ai_full_series_single_pass_no_device():
+    """full_series with passes=1 returns correct structure when no device is present."""
+    agent = AIAgent()
+    await agent.start()
+    result = await agent.execute("full_series", {"passes": 1}, None)
+    assert result["task"] == "full_series"
+    assert result["passes"] == 1
+    assert len(result["rounds"]) == 1
+    round0 = result["rounds"][0]
+    assert round0["round"] == 1
+    assert "interference" in round0
+    assert "anomaly" in round0
+    assert "recommendations" in round0
+    assert "timestamp" in result
+    await agent.stop()
+
+
+@pytest.mark.asyncio
+async def test_ai_full_series_double_pass_no_device():
+    """full_series with passes=2 produces two rounds."""
+    agent = AIAgent()
+    await agent.start()
+    result = await agent.execute("full_series", {"passes": 2}, None)
+    assert result["passes"] == 2
+    assert len(result["rounds"]) == 2
+    assert result["rounds"][0]["round"] == 1
+    assert result["rounds"][1]["round"] == 2
+    await agent.stop()
+
+
+@pytest.mark.asyncio
+async def test_ai_full_series_triple_pass_no_device():
+    """full_series with passes=3 produces three rounds."""
+    agent = AIAgent()
+    await agent.start()
+    result = await agent.execute("full_series", {"passes": 3}, None)
+    assert result["passes"] == 3
+    assert len(result["rounds"]) == 3
+    await agent.stop()
+
+
+@pytest.mark.asyncio
+async def test_ai_full_series_chaimera_summary():
+    """full_series queries CHAiMERA3sp for a summary when a provider is configured."""
+    from unittest.mock import patch, AsyncMock
+
+    agent = AIAgent({
+        "chaimera3sp": {
+            "strategy": "first",
+            "providers": {"kimi": {"api_key": "kimi-key"}},
+        }
+    })
+    await agent.start()
+    mock_resp = {
+        "provider": "kimi",
+        "response": "RF health looks good.",
+        "model": "kimi-2.6",
+        "timestamp": "2026-01-01T00:00:00+00:00",
+    }
+    with patch.object(agent._chaimera, "query", new_callable=AsyncMock, return_value=mock_resp):
+        result = await agent.execute("full_series", {"passes": 1}, None)
+    assert result["rounds"][0].get("chaimera_summary") == "RF health looks good."
+    assert result["rounds"][0].get("chaimera_provider") == "kimi"
+    await agent.stop()
+
+
 # ------------------------------------------------------------------
 # CommsAgent
 # ------------------------------------------------------------------

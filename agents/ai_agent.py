@@ -41,6 +41,7 @@ class AIAgent(AgentBase):
         "recommend_config",
         "research",
         "auto_tune_fleet",
+        "full_series",
     }
 
     def __init__(self, config: Optional[Dict[str, Any]] = None):
@@ -76,6 +77,8 @@ class AIAgent(AgentBase):
             return await self._research(params)
         if task == "auto_tune_fleet":
             return await self._auto_tune_fleet(params)
+        if task == "full_series":
+            return await self._full_series(params, device)
         raise ValueError(f"Unknown task: {task}")
 
     # ------------------------------------------------------------------
@@ -339,4 +342,56 @@ class AIAgent(AgentBase):
             "tuned": successes,
             "total": len(devices),
             "results": [r if isinstance(r, dict) else str(r) for r in results],
+        }
+
+    async def _full_series(
+        self, params: Dict[str, Any], device: Optional[ESP32Device]
+    ) -> Dict[str, Any]:
+        """
+        Run the full AI analysis series in one pass (or multiple passes).
+
+        Executes interference detection, anomaly detection, configuration
+        recommendations, and auto-optimisation in sequence.  When CHAiMERA3sp
+        providers are configured, each pass is bookended by a research query
+        that summarises the round for context.
+
+        The ``passes`` parameter controls how many times the series is
+        repeated (1 = single, 2 = double, 3 = triple).
+        """
+        passes = int(params.get("passes", 1))
+        all_rounds: List[Dict[str, Any]] = []
+
+        for round_idx in range(passes):
+            round_result: Dict[str, Any] = {"round": round_idx + 1}
+
+            round_result["interference"] = await self._detect_interference(params, device)
+            round_result["anomaly"] = self._anomaly_detect(params, device)
+            round_result["recommendations"] = await self._recommend_config(params, device)
+
+            if device and self.orchestrator:
+                round_result["optimise"] = await self._auto_optimise(params, device)
+
+            if self._chaimera.configured_providers:
+                try:
+                    summary_prompt = (
+                        f"Full AI series round {round_idx + 1}/{passes}. "
+                        "Summarise the RF health status and suggest next steps based on: "
+                        f"interference={round_result['interference'].get('interference', 'unknown')}, "
+                        f"anomalies={len(round_result['anomaly'].get('anomalies', []))}, "
+                        f"recommendations={len(round_result['recommendations'].get('recommendations', []))}."
+                    )
+                    chaimera_result = await self._chaimera.query(summary_prompt, context=params)
+                    round_result["chaimera_summary"] = chaimera_result.get("response", "")
+                    round_result["chaimera_provider"] = chaimera_result.get("provider", "")
+                except Exception as exc:  # pylint: disable=broad-except
+                    logger.warning("CHAiMERA3sp full_series summary failed (round %d): %s",
+                                   round_idx + 1, exc)
+
+            all_rounds.append(round_result)
+
+        return {
+            "task": "full_series",
+            "passes": passes,
+            "rounds": all_rounds,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
         }

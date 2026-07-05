@@ -256,6 +256,13 @@ SHORT_KEYS: Dict[str, tuple] = {
            {}),
     "q?": ("research",            "ai_agent",         "AI research / natural-language answer",
            {}),
+    # Full AI series (single / double / triple pass) — runs via CHAiMERA3sp
+    "s":   ("full_series",        "ai_agent",         "Full AI analysis series (1 pass)",
+            {"passes": 1}),
+    "ss":  ("full_series",        "ai_agent",         "Full AI analysis series (double pass)",
+            {"passes": 2}),
+    "sss": ("full_series",        "ai_agent",         "Full AI analysis series (triple pass)",
+            {"passes": 3}),
 }
 
 # Human-readable group ordering used by the help table
@@ -265,6 +272,7 @@ _KEY_GROUPS: List[tuple] = [
     ("Firmware",   ["fw"]),
     ("Comms",      ["w", "bl", "g", "c", "d"]),
     ("AI",         ["o", "i", "a", "r"]),
+    ("AI Series",  ["s", "ss", "sss"]),
 ]
 
 
@@ -701,6 +709,9 @@ def _print_help() -> None:
     print("    ▸ w bl d       — wifi + BLE + diagnostics")
     print("    ▸ f ft m o     — freq + fine-tune + modulation + optimise")
     print("    ▸ i a r        — interference + anomaly + recommendations")
+    print("    ▸ s            — full AI series (1 pass via CHAiMERA3sp)")
+    print("    ▸ ss           — full AI series, double pass")
+    print("    ▸ sss          — full AI series, triple pass")
     print()
     print("  Natural-language prompts are also accepted:")
     print("    ▸ research best modulation for long-range ESP32")
