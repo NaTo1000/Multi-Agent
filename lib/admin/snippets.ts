@@ -155,7 +155,11 @@ async function executeSnippet(code: string): Promise<{ output: string; error: st
 
     vm.createContext(sandbox)
 
-    // Wrap in async IIFE to support top-level await
+    // Intentional: this module is an admin-only snippet execution tool. Code is
+    // submitted exclusively by authenticated administrators who already hold full
+    // system access. The vm sandbox provides runtime isolation (output capture,
+    // timeout enforcement, stripped globals) rather than a security boundary.
+    // The API route enforces session authentication before reaching this path.
     const wrapped = `(async () => { ${code} })()`
     const script = new vm.Script(wrapped, { filename: "snippet.js" })
     const result = script.runInContext(sandbox, { timeout: EXECUTION_TIMEOUT_MS })
