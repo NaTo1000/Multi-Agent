@@ -238,6 +238,123 @@ async def test_ai_full_series_chaimera_summary():
 
 
 # ------------------------------------------------------------------
+# AIAgent — pipeline_sim (Series → Parallel → Series)
+# ------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_pipeline_sim_structure_no_device():
+    """pipeline_sim returns all three phase keys with no device attached."""
+    agent = AIAgent()
+    await agent.start()
+    result = await agent.execute("pipeline_sim", {}, None)
+
+    assert result["task"] == "pipeline_sim"
+    assert "phase1" in result
+    assert "phase2" in result
+    assert "phase3" in result
+    assert "timestamp" in result
+    await agent.stop()
+
+
+@pytest.mark.asyncio
+async def test_pipeline_sim_phase1_series_order():
+    """Phase 1 contains all three series commands."""
+    agent = AIAgent()
+    await agent.start()
+    result = await agent.execute("pipeline_sim", {}, None)
+
+    p1 = result["phase1"]
+    assert "interference" in p1
+    assert "anomaly" in p1
+    assert "congestion" in p1
+    await agent.stop()
+
+
+@pytest.mark.asyncio
+async def test_pipeline_sim_phase2_parallel_keys():
+    """Phase 2 contains results for all parallel workloads."""
+    agent = AIAgent()
+    await agent.start()
+    result = await agent.execute("pipeline_sim", {}, None)
+
+    p2 = result["phase2"]
+    assert "recommendations" in p2
+    assert "optimise" in p2
+    assert "local_compute" in p2
+    assert "chaimera" in p2
+    assert isinstance(p2["chaimera"], list)
+    await agent.stop()
+
+
+@pytest.mark.asyncio
+async def test_pipeline_sim_phase3_transmission():
+    """Phase 3 produces a transmission payload with expected keys."""
+    agent = AIAgent()
+    await agent.start()
+    result = await agent.execute("pipeline_sim", {}, None)
+
+    p3 = result["phase3"]
+    assert "payload_size_bytes" in p3
+    assert isinstance(p3["payload_size_bytes"], int)
+    assert p3["payload_size_bytes"] > 0
+    assert p3["record_count"] == 1
+    assert "transmission" in p3
+    tx = p3["transmission"]
+    assert tx["format"] == "json"
+    assert tx["encoding"] == "utf-8"
+    assert "record" in tx
+    await agent.stop()
+
+
+@pytest.mark.asyncio
+async def test_pipeline_sim_transmission_record_fields():
+    """Transmission record carries all pipeline-1 and pipeline-2 summary fields."""
+    agent = AIAgent()
+    await agent.start()
+    result = await agent.execute("pipeline_sim", {}, None)
+
+    record = result["phase3"]["transmission"]["record"]
+    assert "pipeline_version" in record
+    assert "timestamp" in record
+    assert "phase1_interference" in record
+    assert "phase1_anomaly_count" in record
+    assert "phase1_congestion_risk" in record
+    assert "phase2_recommendations" in record
+    assert "phase2_optimised" in record
+    assert "phase2_devices_analysed" in record
+    assert "phase2_chaimera_responses" in record
+    await agent.stop()
+
+
+@pytest.mark.asyncio
+async def test_pipeline_sim_chaimera_parallel_queries():
+    """When a CHAiMERA3sp provider is configured, phase 2 includes its response."""
+    from unittest.mock import patch, AsyncMock
+
+    agent = AIAgent({
+        "chaimera3sp": {
+            "strategy": "first",
+            "providers": {"kimi": {"api_key": "kimi-key"}},
+        }
+    })
+    await agent.start()
+    mock_resp = {
+        "provider": "kimi",
+        "response": "Parallel compute recommendation.",
+        "model": "kimi-2.6",
+        "timestamp": "2026-01-01T00:00:00+00:00",
+    }
+    with patch.object(agent._chaimera, "query", new_callable=AsyncMock, return_value=mock_resp):
+        result = await agent.execute("pipeline_sim", {}, None)
+
+    chaimera_list = result["phase2"]["chaimera"]
+    assert len(chaimera_list) >= 1
+    responses = [r.get("response", "") for r in chaimera_list]
+    assert any("Parallel compute recommendation." in r for r in responses)
+    await agent.stop()
+
+
+# ------------------------------------------------------------------
 # CommsAgent
 # ------------------------------------------------------------------
 

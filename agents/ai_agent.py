@@ -42,6 +42,7 @@ class AIAgent(AgentBase):
         "research",
         "auto_tune_fleet",
         "full_series",
+        "pipeline_sim",
     }
 
     def __init__(self, config: Optional[Dict[str, Any]] = None):
@@ -79,6 +80,8 @@ class AIAgent(AgentBase):
             return await self._auto_tune_fleet(params)
         if task == "full_series":
             return await self._full_series(params, device)
+        if task == "pipeline_sim":
+            return await self._pipeline_sim(params, device)
         raise ValueError(f"Unknown task: {task}")
 
     # ------------------------------------------------------------------
@@ -394,4 +397,227 @@ class AIAgent(AgentBase):
             "passes": passes,
             "rounds": all_rounds,
             "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+
+    async def _pipeline_sim(
+        self, params: Dict[str, Any], device: Optional[ESP32Device]
+    ) -> Dict[str, Any]:
+        """
+        Series → Parallel → Series pipeline simulation.
+
+        The pipeline runs in three distinct phases:
+
+        **Phase 1 — Series entry (triple command simulation)**
+          Three commands execute sequentially; each receives the output of the
+          previous as additional context so the pipeline carries accumulated
+          state forward:
+            1. Interference detection
+            2. Anomaly detection
+            3. Congestion prediction
+
+        **Phase 2 — Parallel heavy compute**
+          All workloads that can run independently are launched concurrently
+          with ``asyncio.gather``:
+            - Configuration recommendation
+            - Auto-optimisation (when a device is present)
+            - CHAiMERA3sp research queries — one per configured provider
+              (broadcast strategy) so every provider is utilised in parallel
+            - A local heavy-compute simulation (statistical summary over the
+              RSSI window) that runs as a separate coroutine alongside the
+              remote AI calls
+
+        **Phase 3 — Series termination (data transmission)**
+          Results from the parallel phase are collected and processed
+          sequentially to form the outbound transmission payload:
+            1. Aggregate parallel outputs into a single result dict
+            2. Build a structured transmission record (serialisable snapshot)
+            3. Return the final payload, ready for cloud push or logging
+
+        The overall shape of the returned dict::
+
+            {
+              "task":      "pipeline_sim",
+              "phase1":    { "interference": ..., "anomaly": ..., "congestion": ... },
+              "phase2":    { "recommendations": ..., "optimise": ...,
+                             "chaimera": [...], "local_compute": ... },
+              "phase3":    { "payload_size_bytes": int, "record_count": int,
+                             "transmission": {...} },
+              "timestamp": "<ISO-8601>",
+            }
+        """
+        import asyncio
+        import json
+
+        timestamp = datetime.now(timezone.utc).isoformat()
+
+        # ------------------------------------------------------------------ #
+        # Phase 1 — Series: triple command simulation                         #
+        # ------------------------------------------------------------------ #
+        phase1: Dict[str, Any] = {}
+
+        # Command 1: interference scan
+        interference = await self._detect_interference(params, device)
+        phase1["interference"] = interference
+
+        # Command 2: anomaly detection (context enriched with phase1 output)
+        anomaly_params = {**params, "prior_interference": interference.get("interference", False)}
+        anomaly = self._anomaly_detect(anomaly_params, device)
+        phase1["anomaly"] = anomaly
+
+        # Command 3: congestion prediction (context enriched with commands 1+2)
+        congestion_params = {
+            **params,
+            "prior_interference": interference.get("interference", False),
+            "prior_anomaly_count": len(anomaly.get("anomalies", [])),
+        }
+        congestion = await self._predict_congestion(congestion_params, device)
+        phase1["congestion"] = congestion
+
+        logger.debug("pipeline_sim phase1 complete: interference=%s anomalies=%d",
+                     interference.get("interference"), len(anomaly.get("anomalies", [])))
+
+        # ------------------------------------------------------------------ #
+        # Phase 2 — Parallel: heavy compute                                   #
+        # ------------------------------------------------------------------ #
+
+        phase1_summary = {
+            "interference": interference.get("interference", False),
+            "anomaly_count": len(anomaly.get("anomalies", [])),
+            "congestion_risk": congestion.get("congestion_risk", "unknown"),
+        }
+
+        async def _heavy_recommend() -> Dict[str, Any]:
+            return await self._recommend_config(params, device)
+
+        async def _heavy_optimise() -> Dict[str, Any]:
+            if device and self.orchestrator:
+                return await self._auto_optimise(params, device)
+            return {"optimised": False, "reason": "no_device_or_orchestrator"}
+
+        async def _heavy_chaimera(provider_name: Optional[str] = None) -> Dict[str, Any]:
+            """Query a single CHAiMERA3sp provider (or use first-available)."""
+            if not self._chaimera.configured_providers:
+                return {"provider": "none", "response": "", "error": "no providers configured"}
+            prompt = (
+                "Heavy compute analysis — pipeline phase 2. "
+                f"Phase-1 summary: {phase1_summary}. "
+                "Provide RF optimisation recommendations for an ESP32 fleet."
+            )
+            try:
+                return await self._chaimera.query(prompt, context=params,
+                                                  provider=provider_name)
+            except Exception as exc:  # pylint: disable=broad-except
+                return {"provider": provider_name or "chaimera", "response": "",
+                        "error": str(exc)}
+
+        async def _heavy_local_compute() -> Dict[str, Any]:
+            """
+            CPU-bound statistical summary of all known RSSI windows.
+            Simulates a heavy local compute workload running in parallel with
+            the remote AI calls.
+            """
+            summaries = []
+            for dev_id, window in self._rssi_windows.items():
+                if len(window) < 2:
+                    continue
+                mean = sum(window) / len(window)
+                variance = sum((x - mean) ** 2 for x in window) / len(window)
+                summaries.append({
+                    "device_id": dev_id,
+                    "samples": len(window),
+                    "mean_rssi": round(mean, 2),
+                    "variance": round(variance, 2),
+                })
+            return {"device_summaries": summaries, "devices_analysed": len(summaries)}
+
+        # Build the parallel coroutine list — always include recommend,
+        # optimise, and local compute; add one CHAiMERA3sp coroutine per
+        # configured provider (broadcast pattern).
+        parallel_coros = [
+            _heavy_recommend(),
+            _heavy_optimise(),
+            _heavy_local_compute(),
+        ]
+        chaimera_providers = self._chaimera.configured_providers
+        for pname in chaimera_providers:
+            parallel_coros.append(_heavy_chaimera(pname))
+        # Always include at least one CHAiMERA3sp call even when unconfigured
+        # (it returns a graceful no-provider response)
+        if not chaimera_providers:
+            parallel_coros.append(_heavy_chaimera(None))
+
+        parallel_results = await asyncio.gather(*parallel_coros, return_exceptions=True)
+
+        recommendations_result = (
+            parallel_results[0] if isinstance(parallel_results[0], dict)
+            else {"error": str(parallel_results[0])}
+        )
+        optimise_result = (
+            parallel_results[1] if isinstance(parallel_results[1], dict)
+            else {"error": str(parallel_results[1])}
+        )
+        local_compute_result = (
+            parallel_results[2] if isinstance(parallel_results[2], dict)
+            else {"error": str(parallel_results[2])}
+        )
+        chaimera_results = [
+            r if isinstance(r, dict) else {"error": str(r)}
+            for r in parallel_results[3:]
+        ]
+
+        phase2: Dict[str, Any] = {
+            "recommendations": recommendations_result,
+            "optimise": optimise_result,
+            "local_compute": local_compute_result,
+            "chaimera": chaimera_results,
+        }
+
+        logger.debug("pipeline_sim phase2 complete: %d parallel tasks finished",
+                     len(parallel_results))
+
+        # ------------------------------------------------------------------ #
+        # Phase 3 — Series: data transmission termination                     #
+        # ------------------------------------------------------------------ #
+
+        # Step 1: aggregate all results into a single flat record
+        transmission_record: Dict[str, Any] = {
+            "pipeline_version": "1.0",
+            "timestamp": timestamp,
+            "phase1_interference": phase1["interference"].get("interference", False),
+            "phase1_anomaly_count": len(phase1["anomaly"].get("anomalies", [])),
+            "phase1_congestion_risk": phase1["congestion"].get("congestion_risk", "unknown"),
+            "phase2_recommendations": phase2["recommendations"].get("recommendations", []),
+            "phase2_optimised": phase2["optimise"].get("optimised", False),
+            "phase2_devices_analysed": phase2["local_compute"].get("devices_analysed", 0),
+            "phase2_chaimera_responses": [
+                {"provider": r.get("provider", ""), "response": r.get("response", "")}
+                for r in phase2["chaimera"]
+            ],
+        }
+
+        # Step 2: serialise to measure payload size
+        serialised = json.dumps(transmission_record, default=str)
+        payload_bytes = len(serialised.encode())
+
+        # Step 3: build the final outbound transmission payload
+        transmission: Dict[str, Any] = {
+            "record": transmission_record,
+            "format": "json",
+            "encoding": "utf-8",
+        }
+
+        phase3: Dict[str, Any] = {
+            "payload_size_bytes": payload_bytes,
+            "record_count": 1,
+            "transmission": transmission,
+        }
+
+        logger.debug("pipeline_sim phase3 complete: payload=%d bytes", payload_bytes)
+
+        return {
+            "task": "pipeline_sim",
+            "phase1": phase1,
+            "phase2": phase2,
+            "phase3": phase3,
+            "timestamp": timestamp,
         }

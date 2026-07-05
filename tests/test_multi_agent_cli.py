@@ -295,3 +295,54 @@ class TestFullSeriesShortKeys:
     def test_unknown_key_still_returns_none(self):
         assert resolve_short_keys("xyz") is None
 
+
+# ---------------------------------------------------------------------------
+# resolve_short_keys — pipeline key (p)
+# ---------------------------------------------------------------------------
+
+class TestPipelineShortKey:
+    def test_p_key_resolves_to_pipeline_sim(self):
+        tasks = resolve_short_keys("p")
+        assert tasks is not None
+        assert len(tasks) == 1
+        assert tasks[0].name == "pipeline_sim"
+
+    def test_p_key_agent_type_is_ai_agent(self):
+        tasks = resolve_short_keys("p")
+        assert tasks is not None
+        assert tasks[0].agent_type == "ai_agent"
+
+    def test_p_key_present_in_short_keys_table(self):
+        assert "p" in SHORT_KEYS
+
+    def test_p_combined_with_frequency_key(self):
+        tasks = resolve_short_keys("f p")
+        assert tasks is not None
+        names = [t.name for t in tasks]
+        assert "get_frequency" in names
+        assert "pipeline_sim" in names
+
+    def test_p_combined_with_series_key(self):
+        """p and s can appear together — they are different tasks."""
+        tasks = resolve_short_keys("s p")
+        assert tasks is not None
+        names = [t.name for t in tasks]
+        assert "full_series" in names
+        assert "pipeline_sim" in names
+
+    def test_duplicate_p_key_deduplicated(self):
+        tasks = resolve_short_keys("p p")
+        assert tasks is not None
+        pipeline_tasks = [t for t in tasks if t.name == "pipeline_sim"]
+        assert len(pipeline_tasks) == 1
+
+    @pytest.mark.asyncio
+    async def test_pipeline_sim_executes_via_session(self):
+        """pipeline_sim task completes (DONE or FAILED) when run through a session."""
+        session = MultiAgentSession(_mock_orchestrator(), {})
+        tasks = resolve_short_keys("p")
+        assert tasks is not None
+        deliberate(session._workers, tasks)
+        await session._execute(tasks)
+        assert all(t.status in (TaskStatus.DONE, TaskStatus.FAILED) for t in tasks)
+

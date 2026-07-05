@@ -263,6 +263,9 @@ SHORT_KEYS: Dict[str, tuple] = {
             {"passes": 2}),
     "sss": ("full_series",        "ai_agent",         "Full AI analysis series (triple pass)",
             {"passes": 3}),
+    # Series → Parallel → Series pipeline simulation
+    "p":   ("pipeline_sim",       "ai_agent",         "Series→Parallel→Series pipeline simulation",
+            {}),
 }
 
 # Human-readable group ordering used by the help table
@@ -273,6 +276,7 @@ _KEY_GROUPS: List[tuple] = [
     ("Comms",      ["w", "bl", "g", "c", "d"]),
     ("AI",         ["o", "i", "a", "r"]),
     ("AI Series",  ["s", "ss", "sss"]),
+    ("Pipeline",   ["p"]),
 ]
 
 
@@ -712,6 +716,7 @@ def _print_help() -> None:
     print("    ▸ s            — full AI series (1 pass via CHAiMERA3sp)")
     print("    ▸ ss           — full AI series, double pass")
     print("    ▸ sss          — full AI series, triple pass")
+    print("    ▸ p            — pipeline: triple series → parallel compute → series tx")
     print()
     print("  Natural-language prompts are also accepted:")
     print("    ▸ research best modulation for long-range ESP32")
