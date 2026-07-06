@@ -19,6 +19,7 @@ from typing import Any, Deque, Dict, List, Optional
 from orchestrator.agent import AgentBase
 from orchestrator.device import ESP32Device
 from ai.chaimera3sp import CHAiMERA3sp
+from ai.hiai import HiAiModule
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +44,7 @@ class AIAgent(AgentBase):
         "auto_tune_fleet",
         "full_series",
         "pipeline_sim",
+        "hiai_profile",
     }
 
     def __init__(self, config: Optional[Dict[str, Any]] = None):
@@ -53,6 +55,10 @@ class AIAgent(AgentBase):
         self._recommendations: Dict[str, Dict[str, Any]] = {}
         # CHAiMERA3sp multi-provider AI router
         self._chaimera = CHAiMERA3sp(self.config.get("chaimera3sp"))
+        # HiAi personalisation module (instantiated when config["hiai"] is set)
+        self._hiai: Optional[HiAiModule] = (
+            HiAiModule(chaimera=self._chaimera) if self.config.get("hiai") else None
+        )
 
     # ------------------------------------------------------------------
     # AgentBase interface
@@ -82,6 +88,8 @@ class AIAgent(AgentBase):
             return await self._full_series(params, device)
         if task == "pipeline_sim":
             return await self._pipeline_sim(params, device)
+        if task == "hiai_profile":
+            return self._hiai_profile(params)
         raise ValueError(f"Unknown task: {task}")
 
     # ------------------------------------------------------------------
@@ -283,9 +291,18 @@ class AIAgent(AgentBase):
         Query a configured AI provider (via CHAiMERA3sp) or a legacy cloud AI
         endpoint for research-grade recommendations on frequency, modulation, or
         firmware strategy.  Falls back to built-in heuristics when neither is set.
+
+        When ``params`` contains ``user_id``, the query is personalised via
+        HiAi (if enabled) by injecting it into the provider context so that
+        CHAiMERA3sp can pre-process the prompt through the HiAi pipeline.
         """
         query = params.get("query", "")
-        context = params.get("context", {})
+        context = dict(params.get("context", {}))
+        # Forward user_id and history for HiAi personalisation
+        if params.get("user_id"):
+            context.setdefault("user_id", params["user_id"])
+        if params.get("conversation_history"):
+            context.setdefault("conversation_history", params["conversation_history"])
 
         # Try CHAiMERA3sp providers first
         if self._chaimera.configured_providers:
@@ -345,6 +362,43 @@ class AIAgent(AgentBase):
             "tuned": successes,
             "total": len(devices),
             "results": [r if isinstance(r, dict) else str(r) for r in results],
+        }
+
+    def _hiai_profile(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Return the current :class:`~ai.user_profile.UserProfile` for a given
+        user, or an error dict when HiAi is not enabled.
+
+        Params:
+            user_id: The stable identifier for the target user.
+
+        Returns a serialisable profile dict, or ``{"error": ...}`` when the
+        module is not configured or the user has no recorded interactions.
+        """
+        if self._hiai is None:
+            return {
+                "error": "HiAi module is not enabled (set config['hiai'] to enable).",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            }
+        user_id = params.get("user_id", "")
+        if not user_id:
+            return {
+                "error": "user_id param is required for hiai_profile.",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            }
+        store = self._hiai.get_profile_store()
+        profile = store.get_profile(user_id)
+        if profile is None:
+            return {
+                "user_id": user_id,
+                "exists": False,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            }
+        return {
+            "user_id": user_id,
+            "exists": True,
+            "profile": profile.to_dict(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
         }
 
     async def _full_series(

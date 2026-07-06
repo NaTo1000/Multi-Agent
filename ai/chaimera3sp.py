@@ -19,7 +19,10 @@ import urllib.error
 import urllib.request
 from abc import ABC, abstractmethod
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .hiai import HiAiModule
 
 logger = logging.getLogger(__name__)
 
@@ -329,7 +332,11 @@ class CHAiMERA3sp:
               api_key: ""
     """
 
-    def __init__(self, config: Optional[Dict[str, Any]] = None) -> None:
+    def __init__(
+        self,
+        config: Optional[Dict[str, Any]] = None,
+        hiai_module: Optional["HiAiModule"] = None,
+    ) -> None:
         cfg = config or {}
         self._strategy: str = cfg.get("strategy", "first")
         self._priority: List[str] = cfg.get(
@@ -340,6 +347,7 @@ class CHAiMERA3sp:
         for name, klass in _PROVIDER_REGISTRY.items():
             p_cfg = provider_configs.get(name, {})
             self._providers[name] = klass(p_cfg)
+        self._hiai: Optional["HiAiModule"] = hiai_module
 
         configured = [n for n in self._priority if self._providers[n].is_configured]
         logger.info(
@@ -362,6 +370,12 @@ class CHAiMERA3sp:
         """
         Route a query to the appropriate provider(s).
 
+        If a :class:`~ai.hiai.HiAiModule` is attached and ``context`` contains
+        a ``user_id``, the prompt is pre-processed through the HiAi pipeline
+        first: the resolved (disambiguated) prompt is used instead of the raw
+        one, and ``rapport_note`` plus ``emotional_snapshot`` are injected into
+        the context forwarded to the provider.
+
         Args:
             prompt:   Natural-language prompt / query string.
             context:  Optional key-value context forwarded to the provider.
@@ -373,6 +387,33 @@ class CHAiMERA3sp:
         """
         context = context or {}
         timestamp = datetime.now(timezone.utc).isoformat()
+
+        # HiAi pre-processing — run when a hiai_module is attached and a
+        # user_id is present in context so the pipeline can personalise.
+        if self._hiai is not None and context.get("user_id"):
+            try:
+                history: List[str] = context.get("conversation_history", [])
+                hiai_result = await self._hiai.process(
+                    prompt=prompt,
+                    user_id=context["user_id"],
+                    conversation_history=history,
+                )
+                # Swap in the disambiguated prompt
+                prompt = hiai_result.resolved_prompt
+                # Inject personalisation signals into the provider context
+                context = {
+                    **context,
+                    "rapport_note": hiai_result.rapport_note,
+                    "emotional_snapshot": hiai_result.emotional_snapshot.to_dict(),
+                    "rapport_context": hiai_result.rapport_context,
+                }
+                logger.debug(
+                    "CHAiMERA3sp HiAi pre-processed | user=%s | tone=%s",
+                    context["user_id"],
+                    hiai_result.emotional_snapshot.dominant_tone,
+                )
+            except Exception as exc:  # pylint: disable=broad-except
+                logger.warning("CHAiMERA3sp HiAi pre-processing failed: %s", exc)
 
         if provider:
             return await self._query_single(provider, prompt, context, timestamp)
