@@ -1,36 +1,67 @@
 """
-Technical Learning Cortex (TLC) — domain knowledge accumulator for the
-multi-agent orchestration system.
+Technical Learning Cortex (TLC) — domain knowledge accumulator and
+dream-state self-testing engine for the multi-agent orchestration system.
 
-The TLC observes agent task outcomes and, using lightweight statistical
-pattern recognition, derives reusable :class:`KnowledgeEntry` objects that
-surface operational insights across sessions.
+The TLC has two operating modes:
+
+**Waking mode** — observes real agent task outcomes, accumulates
+:class:`TechnicalObservation` records, and derives reusable
+:class:`KnowledgeEntry` insights via :class:`PatternRecognizer`.
+
+**Dream-state mode** — periodically enters a sandboxed self-test cycle in
+which it deliberately applies guardrailed corruptions to a copy of its own
+knowledge state, records the system's reactive measures, researches those
+measures against a set of :ref:`AlgorithmicProtocols`, produces a
+:class:`DreamEvaluation` with updated recommendations, evaluates the
+quality of that output, and derives a :class:`MindStatus` that reflects
+the overall cognitive health of the TLC.
 
 Architecture
 ------------
+Waking:
+
 1. :class:`TechnicalObservation`    — one recorded agent task outcome.
 2. :class:`KnowledgeEntry`          — a derived insight with confidence score.
 3. :class:`TechnicalKnowledgeStore` — in-memory repository for observations
                                       and derived knowledge.
 4. :class:`PatternRecognizer`       — analyses observation windows to produce
                                       :class:`KnowledgeEntry` objects.
-5. :class:`TLCModule`               — high-level coordinator: record → analyse
-                                      → enrich context.
+
+Dream-state:
+
+5. :class:`DreamCorruption`         — a guardrailed corruption specification.
+6. :class:`ReactiveCapture`         — one system reaction to a corruption.
+7. :class:`DreamResearch`           — resilience analysis across all captures.
+8. :class:`DreamEvaluation`         — recommendations derived from activated
+                                      :ref:`AlgorithmicProtocols`.
+9. :class:`MindStatus`              — final cognitive health assessment.
+10. :class:`DreamSession`           — complete record of one dream cycle.
+11. :class:`DreamStateEngine`       — orchestrates the full dream loop.
+
+Coordinator:
+
+12. :class:`TLCModule`              — exposes ``record()``, ``query()``,
+                                      ``get_context()``, and
+                                      ``run_dream_cycle()``.
 
 Design principles
 -----------------
-* All signals are derived exclusively from recorded task outcomes.
-  No simulated, fabricated, or hallucinated data is introduced.
-* Confidence scores use elementary statistics: consistency ratio ×
-  evidence-saturation factor (saturates at 1.0 after ``_MIN_EVIDENCE``
-  observations).
-* The module is stateless in itself — all persistent state lives in
-  :class:`TechnicalKnowledgeStore`.
+* All signals are derived exclusively from recorded observations or from
+  deterministic computation on those observations.  No simulated,
+  fabricated, or hallucinated data is introduced.
+* Corruptions are applied only to a deep-copied sandbox — the live
+  :class:`TechnicalKnowledgeStore` is never mutated during a dream cycle.
+* Corruption magnitude is bounded by ``_DREAM_MAX_MAGNITUDE`` (0.5) so
+  at most half of any observation set is corrupted in a single cycle.
+* Protocol-triggered recommendations are advisory only; they do not
+  automatically modify module constants.
 """
 
 from __future__ import annotations
 
+import copy
 import logging
+import uuid
 from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -51,6 +82,88 @@ _SUCCESS_THRESHOLD: float = 0.8   # ≥ 80 % successes → high-reliability entr
 
 # Parameter keys to track for value-level preference analysis.
 _TRACKED_PARAMS: Tuple[str, ...] = ("band", "scheme", "template")
+
+# ---------------------------------------------------------------------------
+# Dream-state constants
+# ---------------------------------------------------------------------------
+
+# Maximum fraction of observations that a single corruption may affect.
+_DREAM_MAX_MAGNITUDE: float = 0.5
+
+# Corruption type identifiers.
+CORRUPT_NEGATE_SUCCESS: str = "negate_success"
+CORRUPT_NULLIFY_PARAM: str = "nullify_param"
+CORRUPT_INJECT_BAND_NOISE: str = "inject_band_noise"
+CORRUPT_DEFLATE_CONFIDENCE: str = "deflate_confidence"
+CORRUPT_DOMAIN_SWAP: str = "domain_swap"
+
+# Mind-status thresholds (based on eval_score).
+_MIND_STATUS_HEALTHY: float = 0.80
+_MIND_STATUS_LEARNING: float = 0.60
+_MIND_STATUS_STRESSED: float = 0.35
+
+# Expected minimum knowledge entries for "coverage" calculation.
+_EXPECTED_KNOWLEDGE_ENTRIES: int = 5
+
+# ---------------------------------------------------------------------------
+# Algorithmic Protocols
+#
+# Each protocol maps a vulnerability trigger to an advisory recommendation
+# and a concrete parameter adjustment.  Triggered protocols are included in
+# every DreamEvaluation produced by that dream cycle.
+# ---------------------------------------------------------------------------
+
+_PROTOCOLS: Dict[str, Dict[str, Any]] = {
+    "alpha": {
+        "name": "ProtocolAlpha — Evidence Reinforcement",
+        "trigger": CORRUPT_NEGATE_SUCCESS,
+        "recommendation": (
+            "Increase _MIN_EVIDENCE from 5 to 7 to require more observations "
+            "before emitting high-confidence knowledge entries, improving "
+            "resilience to short-term success-rate fluctuations."
+        ),
+        "adjustment": {"_MIN_EVIDENCE": 7},
+    },
+    "beta": {
+        "name": "ProtocolBeta — Null-Parameter Guard",
+        "trigger": CORRUPT_NULLIFY_PARAM,
+        "recommendation": (
+            "Add an explicit None-value guard in parameter-preference analysis "
+            "so that observations with missing tracked parameters are skipped "
+            "rather than propagating null entries into the knowledge base."
+        ),
+        "adjustment": {"null_param_guard": True},
+    },
+    "gamma": {
+        "name": "ProtocolGamma — Confidence Floor Adjustment",
+        "trigger": CORRUPT_DEFLATE_CONFIDENCE,
+        "recommendation": (
+            "Lower the default min_confidence floor in get_context() from 0.3 "
+            "to 0.1 to retain informative but lower-confidence insights when "
+            "confidence scores have been deflated by transient data quality issues."
+        ),
+        "adjustment": {"min_confidence_floor": 0.1},
+    },
+    "delta": {
+        "name": "ProtocolDelta — Domain Isolation Hardening",
+        "trigger": CORRUPT_DOMAIN_SWAP,
+        "recommendation": (
+            "Validate domain labels against a canonical domain registry before "
+            "indexing observations to prevent cross-domain pattern contamination."
+        ),
+        "adjustment": {"domain_validation": True},
+    },
+    "epsilon": {
+        "name": "ProtocolEpsilon — Band-Value Sanitisation",
+        "trigger": CORRUPT_INJECT_BAND_NOISE,
+        "recommendation": (
+            "Sanitise 'band' parameter values against the known-good band list "
+            "(2.4GHz, 5GHz, 868MHz, 915MHz, LoRa) before recording observations "
+            "to prevent malformed band strings from polluting preference analysis."
+        ),
+        "adjustment": {"band_sanitisation": True},
+    },
+}
 
 
 # ---------------------------------------------------------------------------
@@ -157,6 +270,216 @@ def _confidence(consistent: int, total: int) -> float:
     ratio = consistent / total
     evidence_factor = min(1.0, total / _MIN_EVIDENCE)
     return round(ratio * evidence_factor, 3)
+
+
+# ---------------------------------------------------------------------------
+# Dream-state dataclasses
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class DreamCorruption:
+    """
+    Specification for one guardrailed corruption applied during a dream cycle.
+
+    Attributes:
+        corruption_type: One of the ``CORRUPT_*`` module constants.
+        target:          What is being corrupted (domain name, param key, …).
+        magnitude:       Fraction of items to corrupt, capped at
+                         ``_DREAM_MAX_MAGNITUDE``.
+        guardrail:       Human-readable description of the safety bound applied.
+    """
+
+    corruption_type: str
+    target: str
+    magnitude: float
+    guardrail: str
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "corruption_type": self.corruption_type,
+            "target": self.target,
+            "magnitude": self.magnitude,
+            "guardrail": self.guardrail,
+        }
+
+
+@dataclass
+class ReactiveCapture:
+    """
+    The system's recorded reaction to a single :class:`DreamCorruption`.
+
+    Attributes:
+        corruption:     The corruption that was applied.
+        component:      Name of the component under test
+                        (e.g. ``"PatternRecognizer"``, ``"KnowledgeStore"``).
+        reaction:       ``"resilient"`` | ``"degraded"`` | ``"failed"``.
+        baseline_count: Knowledge entries before corruption.
+        post_count:     Knowledge entries after corruption.
+        details:        Supplementary metrics (confidence deltas, etc.).
+    """
+
+    corruption: DreamCorruption
+    component: str
+    reaction: str          # "resilient" | "degraded" | "failed"
+    baseline_count: int
+    post_count: int
+    details: Dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "corruption": self.corruption.to_dict(),
+            "component": self.component,
+            "reaction": self.reaction,
+            "baseline_count": self.baseline_count,
+            "post_count": self.post_count,
+            "details": self.details,
+        }
+
+
+@dataclass
+class DreamResearch:
+    """
+    Resilience analysis derived from a list of :class:`ReactiveCapture` records.
+
+    Attributes:
+        total_corruptions:    Total corruptions applied in the dream cycle.
+        resilient_count:      Corruptions the system withstood without degradation.
+        degraded_count:       Corruptions that caused partial quality loss.
+        failed_count:         Corruptions that caused total or critical failure.
+        resilience_score:     ``resilient_count / total_corruptions`` (0–1).
+        vulnerable_triggers:  Corruption types that caused degraded/failed reactions.
+        stable_triggers:      Corruption types that were fully resilient.
+        findings:             Human-readable research findings.
+    """
+
+    total_corruptions: int
+    resilient_count: int
+    degraded_count: int
+    failed_count: int
+    resilience_score: float
+    vulnerable_triggers: List[str]
+    stable_triggers: List[str]
+    findings: List[str]
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "total_corruptions": self.total_corruptions,
+            "resilient_count": self.resilient_count,
+            "degraded_count": self.degraded_count,
+            "failed_count": self.failed_count,
+            "resilience_score": round(self.resilience_score, 3),
+            "vulnerable_triggers": self.vulnerable_triggers,
+            "stable_triggers": self.stable_triggers,
+            "findings": self.findings,
+        }
+
+
+@dataclass
+class DreamEvaluation:
+    """
+    Advisory evaluation produced from :class:`DreamResearch`, including
+    activated :ref:`AlgorithmicProtocols`.
+
+    Attributes:
+        research:              The underlying resilience research.
+        activated_protocols:   Protocol names whose trigger conditions were met.
+        recommendations:       Advisory strings from activated protocols.
+        protocol_adjustments:  Concrete parameter-change suggestions, keyed
+                               by protocol name.
+        eval_score:            0–1 overall quality score for this dream cycle.
+                               Computed as ``resilience_score`` weighted by
+                               the fraction of protocols that were *not*
+                               triggered (fewer triggers → healthier system).
+    """
+
+    research: DreamResearch
+    activated_protocols: List[str]
+    recommendations: List[str]
+    protocol_adjustments: Dict[str, Dict[str, Any]]
+    eval_score: float
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "research": self.research.to_dict(),
+            "activated_protocols": self.activated_protocols,
+            "recommendations": self.recommendations,
+            "protocol_adjustments": self.protocol_adjustments,
+            "eval_score": round(self.eval_score, 3),
+        }
+
+
+@dataclass
+class MindStatus:
+    """
+    Final cognitive health assessment of the TLC after a dream cycle.
+
+    Attributes:
+        status:             ``"healthy"`` | ``"learning"`` | ``"stressed"``
+                            | ``"degraded"``.
+        eval_score:         Dream-cycle evaluation score (0–1).
+        resilience_score:   Fraction of corruptions withstood (0–1).
+        knowledge_coverage: Fraction of expected knowledge entries present (0–1).
+        diagnosis:          Plain-English summary for operators.
+        timestamp:          UTC ISO-8601 assessment timestamp.
+    """
+
+    status: str
+    eval_score: float
+    resilience_score: float
+    knowledge_coverage: float
+    diagnosis: str
+    timestamp: str = field(
+        default_factory=lambda: datetime.now(timezone.utc).isoformat()
+    )
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "status": self.status,
+            "eval_score": round(self.eval_score, 3),
+            "resilience_score": round(self.resilience_score, 3),
+            "knowledge_coverage": round(self.knowledge_coverage, 3),
+            "diagnosis": self.diagnosis,
+            "timestamp": self.timestamp,
+        }
+
+
+@dataclass
+class DreamSession:
+    """
+    Complete record of one TLC dream cycle.
+
+    Attributes:
+        session_id:    Unique identifier for this cycle.
+        corruptions:   Corruption specifications that were applied.
+        captures:      Reactive captures (one per corruption).
+        research:      Resilience analysis.
+        evaluation:    Protocol-driven evaluation and recommendations.
+        mind_status:   Final cognitive health assessment.
+        started_at:    UTC ISO-8601 timestamp when the cycle began.
+        completed_at:  UTC ISO-8601 timestamp when the cycle finished.
+    """
+
+    session_id: str
+    corruptions: List[DreamCorruption]
+    captures: List[ReactiveCapture]
+    research: DreamResearch
+    evaluation: DreamEvaluation
+    mind_status: MindStatus
+    started_at: str
+    completed_at: str
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "session_id": self.session_id,
+            "corruptions": [c.to_dict() for c in self.corruptions],
+            "captures": [c.to_dict() for c in self.captures],
+            "research": self.research.to_dict(),
+            "evaluation": self.evaluation.to_dict(),
+            "mind_status": self.mind_status.to_dict(),
+            "started_at": self.started_at,
+            "completed_at": self.completed_at,
+        }
 
 
 # ---------------------------------------------------------------------------
@@ -480,26 +803,535 @@ class PatternRecognizer:
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# DreamStateEngine
+# ---------------------------------------------------------------------------
+
+
+class DreamStateEngine:
+    """
+    Orchestrates one TLC dream-state cycle.
+
+    The engine operates entirely on a deep-copied sandbox — the live
+    :class:`TechnicalKnowledgeStore` is never mutated.
+
+    Cycle steps
+    -----------
+    1. Record the baseline knowledge state from the live store.
+    2. Plan a fixed set of guardrailed corruptions.
+    3. For each corruption: build a sandboxed store → apply corruption →
+       run :class:`PatternRecognizer` → compare to baseline →
+       record :class:`ReactiveCapture`.
+    4. Research all captures → produce :class:`DreamResearch`.
+    5. Match vulnerable triggers to :ref:`AlgorithmicProtocols` →
+       produce :class:`DreamEvaluation`.
+    6. Evaluate the evaluation output itself (self-referential quality check).
+    7. Assess :class:`MindStatus` from eval_score + knowledge coverage.
+    8. Return :class:`DreamSession`.
+    """
+
+    def __init__(self) -> None:
+        self._recognizer = PatternRecognizer()
+
+    def run(self, live_store: TechnicalKnowledgeStore) -> DreamSession:
+        """
+        Execute a complete dream cycle against *live_store*.
+
+        Args:
+            live_store: The active :class:`TechnicalKnowledgeStore`.
+
+        Returns:
+            A :class:`DreamSession` with full cycle details.
+        """
+        started_at = datetime.now(timezone.utc).isoformat()
+        session_id = str(uuid.uuid4())
+
+        # Step 1 — baseline
+        baseline_entries = live_store.get_knowledge()
+        baseline_count = len(baseline_entries)
+        live_obs = live_store.get_observations()
+
+        # Step 2 — plan corruptions (guardrailed)
+        corruptions = self._plan_corruptions(live_obs, baseline_entries)
+
+        # Step 3 — apply each corruption in its own sandbox and capture reaction
+        captures: List[ReactiveCapture] = []
+        for corruption in corruptions:
+            capture = self._apply_and_capture(live_obs, corruption, baseline_count)
+            captures.append(capture)
+
+        # Step 4 — research
+        research = self._research(captures)
+
+        # Step 5 & 6 — evaluate (includes self-referential quality check)
+        evaluation = self._evaluate(research)
+
+        # Step 7 — assess mind status
+        mind_status = self._assess_mind_status(evaluation, live_store)
+
+        completed_at = datetime.now(timezone.utc).isoformat()
+
+        session = DreamSession(
+            session_id=session_id,
+            corruptions=corruptions,
+            captures=captures,
+            research=research,
+            evaluation=evaluation,
+            mind_status=mind_status,
+            started_at=started_at,
+            completed_at=completed_at,
+        )
+        logger.info(
+            "TLC dream cycle complete | session=%s | mind_status=%s | eval_score=%.3f",
+            session_id, mind_status.status, evaluation.eval_score,
+        )
+        return session
+
+    # ------------------------------------------------------------------
+    # Step 2: plan corruptions
+    # ------------------------------------------------------------------
+
+    def _plan_corruptions(
+        self,
+        observations: List[TechnicalObservation],
+        baseline: List[KnowledgeEntry],
+    ) -> List[DreamCorruption]:
+        """
+        Build a guardrailed corruption plan for the current state.
+
+        Returns one corruption per type that is applicable given the
+        available observations and knowledge entries.
+        """
+        planned: List[DreamCorruption] = []
+        n_obs = len(observations)
+
+        # CORRUPT_NEGATE_SUCCESS — only useful if there are any observations
+        if n_obs > 0:
+            mag = min(_DREAM_MAX_MAGNITUDE, max(0.1, 2 / n_obs))
+            planned.append(DreamCorruption(
+                corruption_type=CORRUPT_NEGATE_SUCCESS,
+                target="success_flag",
+                magnitude=mag,
+                guardrail=(
+                    f"At most {mag:.0%} of observations are flipped; "
+                    "applied to sandbox copy only."
+                ),
+            ))
+
+        # CORRUPT_NULLIFY_PARAM — only useful if tracked params are present
+        has_tracked = any(
+            any(o.params.get(p) is not None for p in _TRACKED_PARAMS)
+            for o in observations
+        )
+        if has_tracked and n_obs > 0:
+            mag = min(_DREAM_MAX_MAGNITUDE, max(0.1, 2 / n_obs))
+            planned.append(DreamCorruption(
+                corruption_type=CORRUPT_NULLIFY_PARAM,
+                target=",".join(_TRACKED_PARAMS),
+                magnitude=mag,
+                guardrail=(
+                    f"At most {mag:.0%} of tracked-param values are nullified; "
+                    "applied to sandbox copy only."
+                ),
+            ))
+
+        # CORRUPT_INJECT_BAND_NOISE — only useful if band param exists
+        has_band = any(o.params.get("band") is not None for o in observations)
+        if has_band and n_obs > 0:
+            mag = min(_DREAM_MAX_MAGNITUDE, max(0.1, 2 / n_obs))
+            planned.append(DreamCorruption(
+                corruption_type=CORRUPT_INJECT_BAND_NOISE,
+                target="band",
+                magnitude=mag,
+                guardrail=(
+                    f"At most {mag:.0%} of 'band' values replaced with "
+                    "'INVALID_BAND'; applied to sandbox copy only."
+                ),
+            ))
+
+        # CORRUPT_DEFLATE_CONFIDENCE — only useful if knowledge entries exist
+        if baseline:
+            planned.append(DreamCorruption(
+                corruption_type=CORRUPT_DEFLATE_CONFIDENCE,
+                target="knowledge_entries",
+                magnitude=0.5,
+                guardrail=(
+                    "All knowledge entry confidence values halved in sandbox; "
+                    "live store is not modified."
+                ),
+            ))
+
+        # CORRUPT_DOMAIN_SWAP — only useful if ≥ 2 distinct domains
+        domains = {o.domain for o in observations}
+        if len(domains) >= 2 and n_obs > 0:
+            mag = min(_DREAM_MAX_MAGNITUDE, max(0.1, 2 / n_obs))
+            planned.append(DreamCorruption(
+                corruption_type=CORRUPT_DOMAIN_SWAP,
+                target="domain_label",
+                magnitude=mag,
+                guardrail=(
+                    f"At most {mag:.0%} of observations have their domain "
+                    "label swapped; applied to sandbox copy only."
+                ),
+            ))
+
+        return planned
+
+    # ------------------------------------------------------------------
+    # Step 3: apply one corruption and capture the reaction
+    # ------------------------------------------------------------------
+
+    def _apply_and_capture(
+        self,
+        observations: List[TechnicalObservation],
+        corruption: DreamCorruption,
+        baseline_count: int,
+    ) -> ReactiveCapture:
+        """
+        Build a sandboxed store, apply *corruption*, run pattern recognition,
+        and compare the result to *baseline_count*.
+        """
+        try:
+            sandboxed_obs = self._corrupt_observations(observations, corruption)
+            sandbox_store = TechnicalKnowledgeStore()
+            for obs in sandboxed_obs:
+                sandbox_store.add_observation(obs)
+
+            # For confidence deflation, also seed the sandbox with corrupted entries
+            if corruption.corruption_type == CORRUPT_DEFLATE_CONFIDENCE:
+                self._seed_deflated_knowledge(sandbox_store, baseline_count)
+            else:
+                self._recognizer.analyse(sandbox_store)
+
+            post_count = sandbox_store.knowledge_count
+            avg_conf_post = self._avg_confidence(sandbox_store)
+
+            reaction = self._classify_reaction(baseline_count, post_count)
+            details: Dict[str, Any] = {
+                "baseline_knowledge_count": baseline_count,
+                "post_knowledge_count": post_count,
+                "avg_confidence_post": round(avg_conf_post, 3),
+            }
+        except Exception as exc:  # pylint: disable=broad-except
+            logger.warning("DreamStateEngine: corruption %s raised: %s",
+                           corruption.corruption_type, exc)
+            reaction = "failed"
+            post_count = 0
+            details = {"error": str(exc)}
+
+        return ReactiveCapture(
+            corruption=corruption,
+            component="PatternRecognizer",
+            reaction=reaction,
+            baseline_count=baseline_count,
+            post_count=post_count,
+            details=details,
+        )
+
+    # ------------------------------------------------------------------
+    # Corruption applicators
+    # ------------------------------------------------------------------
+
+    def _corrupt_observations(
+        self,
+        observations: List[TechnicalObservation],
+        corruption: DreamCorruption,
+    ) -> List[TechnicalObservation]:
+        """Return a deep-copied, corrupted list of observations."""
+        sandboxed = copy.deepcopy(observations)
+        n = len(sandboxed)
+        if n == 0:
+            return sandboxed
+
+        # Number of items to affect (at least 1)
+        n_corrupt = max(1, int(n * corruption.magnitude))
+
+        ctype = corruption.corruption_type
+
+        if ctype == CORRUPT_NEGATE_SUCCESS:
+            for obs in sandboxed[:n_corrupt]:
+                obs.success = not obs.success
+
+        elif ctype == CORRUPT_NULLIFY_PARAM:
+            for obs in sandboxed[:n_corrupt]:
+                for pkey in _TRACKED_PARAMS:
+                    if pkey in obs.params:
+                        obs.params[pkey] = None
+
+        elif ctype == CORRUPT_INJECT_BAND_NOISE:
+            for obs in sandboxed[:n_corrupt]:
+                if "band" in obs.params:
+                    obs.params["band"] = "INVALID_BAND"
+
+        elif ctype == CORRUPT_DOMAIN_SWAP:
+            domains = list({o.domain for o in sandboxed})
+            if len(domains) >= 2:
+                # Rotate domain labels among the first n_corrupt observations
+                for i, obs in enumerate(sandboxed[:n_corrupt]):
+                    obs.domain = domains[(domains.index(obs.domain) + 1) % len(domains)]
+
+        # CORRUPT_DEFLATE_CONFIDENCE acts on the knowledge store, not observations
+        return sandboxed
+
+    def _seed_deflated_knowledge(
+        self,
+        store: TechnicalKnowledgeStore,
+        baseline_count: int,
+    ) -> None:
+        """
+        Populate the sandbox store with synthetic entries at half confidence
+        to test whether confidence-deflated knowledge still surfaces in queries.
+        """
+        self._recognizer.analyse(store)
+        deflated: Dict[str, KnowledgeEntry] = {}
+        for key, entry in store._knowledge.items():
+            e = copy.deepcopy(entry)
+            e.confidence = round(e.confidence * 0.5, 3)
+            deflated[key] = e
+        store._knowledge = deflated
+
+    # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _avg_confidence(store: TechnicalKnowledgeStore) -> float:
+        entries = store.get_knowledge()
+        if not entries:
+            return 0.0
+        return sum(e.confidence for e in entries) / len(entries)
+
+    @staticmethod
+    def _classify_reaction(baseline: int, post: int) -> str:
+        """
+        Classify the system's reaction to a corruption.
+
+        - ``"resilient"``  : knowledge count unchanged or increased.
+        - ``"degraded"``   : knowledge count dropped but not to zero
+                             (or baseline was zero and post is also zero).
+        - ``"failed"``     : knowledge count dropped to zero when baseline > 0.
+        """
+        if baseline == 0:
+            return "resilient"
+        if post >= baseline:
+            return "resilient"
+        if post == 0:
+            return "failed"
+        return "degraded"
+
+    # ------------------------------------------------------------------
+    # Step 4: research
+    # ------------------------------------------------------------------
+
+    def _research(self, captures: List[ReactiveCapture]) -> DreamResearch:
+        """Analyse captures and produce a :class:`DreamResearch`."""
+        total = len(captures)
+        resilient = sum(1 for c in captures if c.reaction == "resilient")
+        degraded = sum(1 for c in captures if c.reaction == "degraded")
+        failed = sum(1 for c in captures if c.reaction == "failed")
+
+        resilience_score = resilient / total if total > 0 else 1.0
+
+        vulnerable_triggers = [
+            c.corruption.corruption_type
+            for c in captures
+            if c.reaction in ("degraded", "failed")
+        ]
+        stable_triggers = [
+            c.corruption.corruption_type
+            for c in captures
+            if c.reaction == "resilient"
+        ]
+
+        findings: List[str] = []
+        if resilient == total:
+            findings.append(
+                "All corruptions were withstood without degradation — "
+                "pattern recognition is robust across this test set."
+            )
+        if failed > 0:
+            failed_types = [
+                c.corruption.corruption_type for c in captures if c.reaction == "failed"
+            ]
+            findings.append(
+                f"Critical failures detected for corruption types: "
+                f"{', '.join(failed_types)}. Immediate protocol review recommended."
+            )
+        if degraded > 0:
+            deg_types = [
+                c.corruption.corruption_type for c in captures if c.reaction == "degraded"
+            ]
+            findings.append(
+                f"Partial degradation detected for: {', '.join(deg_types)}. "
+                "Advisory protocols have been activated."
+            )
+        if not findings:
+            findings.append("No significant findings from this dream cycle.")
+
+        return DreamResearch(
+            total_corruptions=total,
+            resilient_count=resilient,
+            degraded_count=degraded,
+            failed_count=failed,
+            resilience_score=round(resilience_score, 3),
+            vulnerable_triggers=vulnerable_triggers,
+            stable_triggers=stable_triggers,
+            findings=findings,
+        )
+
+    # ------------------------------------------------------------------
+    # Step 5 & 6: evaluate
+    # ------------------------------------------------------------------
+
+    def _evaluate(self, research: DreamResearch) -> DreamEvaluation:
+        """
+        Match vulnerable triggers to :ref:`AlgorithmicProtocols` and
+        produce a :class:`DreamEvaluation`.
+
+        The ``eval_score`` is computed as::
+
+            eval_score = resilience_score
+                         × (1 − failed_fraction)
+                         × protocol_health_factor
+
+        where ``protocol_health_factor`` = 1 − (activated / total_protocols).
+        """
+        activated_protocols: List[str] = []
+        recommendations: List[str] = []
+        protocol_adjustments: Dict[str, Dict[str, Any]] = {}
+
+        # Activate protocols whose trigger is in the vulnerable set
+        vulnerable_set = set(research.vulnerable_triggers)
+        for proto_key, proto in _PROTOCOLS.items():
+            if proto["trigger"] in vulnerable_set:
+                activated_protocols.append(proto["name"])
+                recommendations.append(proto["recommendation"])
+                protocol_adjustments[proto["name"]] = proto["adjustment"]
+
+        # Compute eval_score
+        total = research.total_corruptions
+        failed_fraction = research.failed_count / total if total > 0 else 0.0
+        n_protocols = len(_PROTOCOLS)
+        n_activated = len(activated_protocols)
+        protocol_health = 1.0 - (n_activated / n_protocols) if n_protocols > 0 else 1.0
+
+        # Self-referential quality check: if no recommendations were produced
+        # despite failures, that is itself a quality deficit.
+        if research.failed_count > 0 and not recommendations:
+            recommendations.append(
+                "Failed reactions were recorded but no protocol covered them — "
+                "review and extend the AlgorithmicProtocol registry."
+            )
+            protocol_health = max(0.0, protocol_health - 0.1)
+
+        eval_score = round(
+            research.resilience_score * (1.0 - failed_fraction) * protocol_health,
+            3,
+        )
+
+        return DreamEvaluation(
+            research=research,
+            activated_protocols=activated_protocols,
+            recommendations=recommendations,
+            protocol_adjustments=protocol_adjustments,
+            eval_score=eval_score,
+        )
+
+    # ------------------------------------------------------------------
+    # Step 7: mind status
+    # ------------------------------------------------------------------
+
+    def _assess_mind_status(
+        self,
+        evaluation: DreamEvaluation,
+        live_store: TechnicalKnowledgeStore,
+    ) -> MindStatus:
+        """
+        Derive :class:`MindStatus` from *evaluation* and live knowledge coverage.
+        """
+        eval_score = evaluation.eval_score
+        resilience = evaluation.research.resilience_score
+        coverage = min(
+            1.0,
+            live_store.knowledge_count / _EXPECTED_KNOWLEDGE_ENTRIES,
+        )
+
+        if eval_score >= _MIND_STATUS_HEALTHY:
+            status = "healthy"
+        elif eval_score >= _MIND_STATUS_LEARNING:
+            status = "learning"
+        elif eval_score >= _MIND_STATUS_STRESSED:
+            status = "stressed"
+        else:
+            status = "degraded"
+
+        # Build a diagnostic narrative
+        parts: List[str] = [
+            f"Mind status: {status.upper()}.",
+            f"Eval score {eval_score:.2f}, resilience {resilience:.2f}, "
+            f"knowledge coverage {coverage:.2f}.",
+        ]
+        if evaluation.activated_protocols:
+            parts.append(
+                f"{len(evaluation.activated_protocols)} protocol(s) activated: "
+                + "; ".join(evaluation.activated_protocols) + "."
+            )
+        if status == "healthy":
+            parts.append(
+                "The TLC is operating within normal parameters."
+            )
+        elif status == "learning":
+            parts.append(
+                "The TLC is accumulating knowledge but resilience margins "
+                "have room for improvement."
+            )
+        elif status == "stressed":
+            parts.append(
+                "Significant vulnerabilities detected. Review activated "
+                "protocol recommendations."
+            )
+        else:
+            parts.append(
+                "Critical resilience failures. Immediate protocol intervention required."
+            )
+
+        return MindStatus(
+            status=status,
+            eval_score=eval_score,
+            resilience_score=resilience,
+            knowledge_coverage=coverage,
+            diagnosis="  ".join(parts),
+        )
+
+
+# ---------------------------------------------------------------------------
+# TLCModule
+# ---------------------------------------------------------------------------
+
+
 class TLCModule:
     """
     Technical Learning Cortex — high-level coordinator.
 
-    Instantiate once and reuse across requests.  All sub-system instances
-    are owned by this module.
+    Exposes both waking-mode observation recording and dream-state
+    self-testing in a single, reusable interface.
 
     Args:
-        store:      Optional external :class:`TechnicalKnowledgeStore`.
-                    Provide one to share state with other components.
-        recognizer: Optional external :class:`PatternRecognizer`.
+        store:        Optional external :class:`TechnicalKnowledgeStore`.
+                      Provide one to share state with other components.
+        recognizer:   Optional external :class:`PatternRecognizer`.
+        dream_engine: Optional external :class:`DreamStateEngine`.
     """
 
     def __init__(
         self,
         store: Optional[TechnicalKnowledgeStore] = None,
         recognizer: Optional[PatternRecognizer] = None,
+        dream_engine: Optional[DreamStateEngine] = None,
     ) -> None:
         self._store = store or TechnicalKnowledgeStore()
         self._recognizer = recognizer or PatternRecognizer()
+        self._dream_engine = dream_engine or DreamStateEngine()
 
     # ------------------------------------------------------------------
     # Public API
@@ -591,6 +1423,27 @@ class TLCModule:
                 self._store.get_device_summary(device_id)
             )
         return ctx
+
+    def run_dream_cycle(self) -> DreamSession:
+        """
+        Execute one dream-state learning cycle against the current knowledge state.
+
+        The cycle:
+        1. Snapshots the live :class:`TechnicalKnowledgeStore` as a baseline.
+        2. Plans a set of guardrailed corruptions applicable to the current data.
+        3. Applies each corruption to a sandboxed copy, runs
+           :class:`PatternRecognizer`, and records a :class:`ReactiveCapture`.
+        4. Researches all captures to produce :class:`DreamResearch`.
+        5. Matches vulnerable triggers to :ref:`AlgorithmicProtocols` and
+           produces a :class:`DreamEvaluation` with recommendations.
+        6. Evaluates the evaluation output itself (self-referential quality check).
+        7. Derives :class:`MindStatus` from eval score and knowledge coverage.
+
+        Returns:
+            A :class:`DreamSession` containing the full cycle record including
+            the :class:`MindStatus` cognitive health assessment.
+        """
+        return self._dream_engine.run(self._store)
 
     def get_store(self) -> TechnicalKnowledgeStore:
         """Return the underlying :class:`TechnicalKnowledgeStore`."""
