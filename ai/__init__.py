@@ -18,6 +18,12 @@ from .tlc import (
     DreamCorruption,
     ReactiveCapture,
     MindStatus,
+    AnomalyFilter,
+    AnomalyRecord,
+    OutcomeInventory,
+    PredictiveReasoner,
+    Prediction,
+    AutonomousDecision,
 )
 
 __all__ = [
@@ -37,4 +43,10 @@ __all__ = [
     "DreamCorruption",
     "ReactiveCapture",
     "MindStatus",
+    "AnomalyFilter",
+    "AnomalyRecord",
+    "OutcomeInventory",
+    "PredictiveReasoner",
+    "Prediction",
+    "AutonomousDecision",
 ]

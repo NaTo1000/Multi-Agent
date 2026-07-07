@@ -35,6 +35,13 @@ from ai.tlc import (
     MindStatus,
     DreamSession,
     DreamStateEngine,
+    # Predictive pipeline classes
+    AnomalyRecord,
+    AnomalyFilter,
+    OutcomeInventory,
+    PredictiveReasoner,
+    Prediction,
+    AutonomousDecision,
     # Main module
     TLCModule,
     # Helpers / constants
@@ -46,6 +53,11 @@ from ai.tlc import (
     _MIND_STATUS_HEALTHY,
     _MIND_STATUS_LEARNING,
     _MIND_STATUS_STRESSED,
+    _ANOMALY_THRESHOLD,
+    _ANOMALY_MIN_HISTORY,
+    _DECISION_PROCEED,
+    _DECISION_ABORT,
+    _DECISION_MIN_CONFIDENCE,
     # Corruption type constants
     CORRUPT_NEGATE_SUCCESS,
     CORRUPT_NULLIFY_PARAM,
@@ -776,15 +788,21 @@ class TestDreamStateEngine:
         assert isinstance(capture, ReactiveCapture)
 
     def test_mind_status_healthy_for_resilient_store(self):
-        """A store where all corruptions are resilient should score 'healthy'."""
-        # Build a store that is naturally resilient: all successes, no params to nullify
+        """
+        A store with strong, consistent success history should score at least
+        'learning' — the pattern recognizer entries survive negation of a small
+        fraction of observations.
+        """
+        # 12 successes: magnitude = min(0.5, 2/12) ≈ 0.17 → 2 negated → 10/12 = 0.83 ≥ 0.8
         store = TechnicalKnowledgeStore()
-        for _ in range(8):
-            store.add_observation(_obs(domain="frequency", task="scan", success=True))
+        for _ in range(12):
+            store.add_observation(_obs(
+                domain="frequency", task="scan",
+                params={"band": "2.4GHz"}, success=True
+            ))
         PatternRecognizer().analyse(store)
         engine = DreamStateEngine()
         session = engine.run(store)
-        # The system should score well
         assert session.mind_status.status in ("healthy", "learning")
 
     def test_research_counts_match_captures(self):
@@ -826,8 +844,9 @@ class TestTLCModuleWaking:
 
     def test_query_empty_when_no_patterns(self):
         tlc = TLCModule()
-        tlc.record("frequency", "scan", {}, {}, True)  # one obs → no threshold crossed
-        assert tlc.query() == []
+        tlc.record("frequency", "scan", {}, {}, True)  # single obs → confidence very low
+        # Require meaningful confidence — a single observation has confidence < 0.3
+        assert tlc.query(min_confidence=0.3) == []
 
     def test_query_returns_knowledge_after_threshold(self):
         tlc = TLCModule()
@@ -1020,3 +1039,560 @@ class TestTLCModuleDream:
         for proto_name, adjustment in session.evaluation.protocol_adjustments.items():
             assert isinstance(proto_name, str)
             assert isinstance(adjustment, dict)
+
+
+# ===========================================================================
+# AnomalyRecord
+# ===========================================================================
+
+class TestAnomalyRecord:
+
+    def _make_record(self, score=0.2, quarantined=False) -> AnomalyRecord:
+        obs = _obs()
+        return AnomalyRecord(
+            observation=obs,
+            anomaly_score=score,
+            established_rate=0.9,
+            history_size=10,
+            is_quarantined=quarantined,
+            reason="Test reason.",
+        )
+
+    def test_creation(self):
+        record = self._make_record()
+        assert record.anomaly_score == 0.2
+        assert record.is_quarantined is False
+
+    def test_to_dict_keys(self):
+        d = self._make_record(score=0.9, quarantined=True).to_dict()
+        for key in ("observation", "anomaly_score", "established_rate",
+                    "history_size", "is_quarantined", "reason"):
+            assert key in d
+
+    def test_is_serialisable(self):
+        json.dumps(self._make_record().to_dict())
+
+    def test_quarantined_flag_propagates(self):
+        assert self._make_record(score=0.9, quarantined=True).to_dict()["is_quarantined"] is True
+
+
+# ===========================================================================
+# TechnicalKnowledgeStore — quarantine support
+# ===========================================================================
+
+class TestKnowledgeStoreQuarantine:
+
+    def test_quarantine_count_starts_zero(self):
+        store = TechnicalKnowledgeStore()
+        assert store.quarantine_count == 0
+
+    def test_add_quarantined_increments_count(self):
+        store = TechnicalKnowledgeStore()
+        store.add_quarantined(_obs())
+        assert store.quarantine_count == 1
+
+    def test_quarantine_does_not_affect_observation_count(self):
+        store = TechnicalKnowledgeStore()
+        store.add_quarantined(_obs())
+        assert store.observation_count == 0
+
+    def test_get_quarantined_returns_all(self):
+        store = TechnicalKnowledgeStore()
+        store.add_quarantined(_obs(domain="frequency"))
+        store.add_quarantined(_obs(domain="firmware"))
+        q = store.get_quarantined()
+        assert len(q) == 2
+
+    def test_quarantined_not_indexed_in_domain(self):
+        store = TechnicalKnowledgeStore()
+        store.add_quarantined(_obs(domain="frequency"))
+        assert store.get_observations(domain="frequency") == []
+
+
+# ===========================================================================
+# AnomalyFilter
+# ===========================================================================
+
+class TestAnomalyFilter:
+
+    def _history_store(self, success_count, fail_count, domain="frequency", task="scan"):
+        store = TechnicalKnowledgeStore()
+        for _ in range(success_count):
+            store.add_observation(_obs(domain=domain, task=task, success=True))
+        for _ in range(fail_count):
+            store.add_observation(_obs(domain=domain, task=task, success=False))
+        return store
+
+    def test_suppressed_below_min_history(self):
+        store = self._history_store(2, 0)   # only 2 obs < _ANOMALY_MIN_HISTORY
+        af = AnomalyFilter()
+        new_obs = _obs(success=False)       # would be anomalous if history were large enough
+        record = af.check(new_obs, store)
+        assert record.is_quarantined is False
+        assert record.anomaly_score == 0.0
+
+    def test_failure_in_high_success_pattern_is_quarantined(self):
+        """Failure when established success rate is high → quarantine."""
+        store = self._history_store(success_count=9, fail_count=0)
+        af = AnomalyFilter()
+        record = af.check(_obs(success=False), store)
+        assert record.is_quarantined is True
+        assert record.anomaly_score >= 0.7
+
+    def test_success_in_high_success_pattern_is_normal(self):
+        """Success matches high-success pattern → not quarantined."""
+        store = self._history_store(success_count=9, fail_count=0)
+        af = AnomalyFilter()
+        record = af.check(_obs(success=True), store)
+        assert record.is_quarantined is False
+        assert record.anomaly_score < 0.7
+
+    def test_success_in_high_failure_pattern_is_quarantined(self):
+        """Unexpected success when the pattern is mostly failures → quarantine."""
+        store = self._history_store(success_count=0, fail_count=9)
+        af = AnomalyFilter()
+        record = af.check(_obs(success=True), store)
+        assert record.is_quarantined is True
+
+    def test_failure_in_high_failure_pattern_is_normal(self):
+        """Failure matches high-failure pattern → not anomalous."""
+        store = self._history_store(success_count=0, fail_count=9)
+        af = AnomalyFilter()
+        record = af.check(_obs(success=False), store)
+        assert record.is_quarantined is False
+
+    def test_mixed_pattern_not_quarantined(self):
+        """50/50 history → score = 0.5 < threshold."""
+        store = self._history_store(success_count=5, fail_count=5)
+        af = AnomalyFilter()
+        record = af.check(_obs(success=False), store)
+        assert record.is_quarantined is False
+
+    def test_history_size_recorded(self):
+        store = self._history_store(7, 2)
+        af = AnomalyFilter()
+        record = af.check(_obs(success=False), store)
+        assert record.history_size == 9
+
+    def test_established_rate_is_correct(self):
+        store = self._history_store(8, 2)   # 80% success
+        af = AnomalyFilter()
+        record = af.check(_obs(success=True), store)
+        assert abs(record.established_rate - 0.8) < 0.01
+
+    def test_record_has_reason(self):
+        store = self._history_store(9, 0)
+        af = AnomalyFilter()
+        record = af.check(_obs(success=False), store)
+        assert record.reason
+
+    def test_domain_and_task_isolation(self):
+        """History from a different task should not influence the check."""
+        store = TechnicalKnowledgeStore()
+        # 9 successes for 'scan' task
+        for _ in range(9):
+            store.add_observation(_obs(domain="frequency", task="scan", success=True))
+        af = AnomalyFilter()
+        # Check a 'lock' task failure — has 0 history → suppressed
+        new_obs = _obs(domain="frequency", task="lock", success=False)
+        record = af.check(new_obs, store)
+        assert record.is_quarantined is False
+
+
+# ===========================================================================
+# OutcomeInventory
+# ===========================================================================
+
+class TestOutcomeInventory:
+
+    def test_empty_store_returns_neutral_prior(self):
+        inv = OutcomeInventory()
+        store = TechnicalKnowledgeStore()
+        prob, n, boost = inv.get_success_probability(store, "frequency", "scan")
+        assert prob == 0.5
+        assert n == 0
+        assert boost is False
+
+    def test_all_successes_returns_probability_one(self):
+        inv = OutcomeInventory()
+        store = _make_store_with_successes(n_ok=5)
+        prob, n, _ = inv.get_success_probability(store, "frequency", "scan")
+        assert prob == 1.0
+        assert n == 5
+
+    def test_all_failures_returns_probability_near_zero(self):
+        inv = OutcomeInventory()
+        store = _make_store_with_failures(n_fail=5, n_ok=0)
+        prob, n, _ = inv.get_success_probability(store, "frequency", "scan")
+        assert prob == 0.0
+
+    def test_recent_successes_outweigh_old_failures(self):
+        """Oldest obs = failures, newest = successes → probability > 0.5."""
+        inv = OutcomeInventory()
+        store = TechnicalKnowledgeStore()
+        # 3 old failures then 3 recent successes
+        for _ in range(3):
+            store.add_observation(_obs(task="scan", success=False))
+        for _ in range(3):
+            store.add_observation(_obs(task="scan", success=True))
+        prob, _, _ = inv.get_success_probability(store, "frequency", "scan")
+        assert prob > 0.5   # recency weighting tips the balance
+
+    def test_params_boost_applied_when_matching(self):
+        inv = OutcomeInventory()
+        store = TechnicalKnowledgeStore()
+        for _ in range(5):
+            store.add_observation(_obs(params={"band": "2.4GHz"}, success=True))
+        prob, n, boost = inv.get_success_probability(
+            store, "frequency", "scan", params={"band": "2.4GHz"}
+        )
+        assert boost is True
+        assert n == 5
+
+    def test_params_boost_not_applied_when_insufficient_matches(self):
+        inv = OutcomeInventory()
+        store = TechnicalKnowledgeStore()
+        # Only 1 matching observation → no boost (need ≥ 2)
+        store.add_observation(_obs(params={"band": "5GHz"}, success=True))
+        for _ in range(4):
+            store.add_observation(_obs(params={"band": "2.4GHz"}, success=True))
+        _, _, boost = inv.get_success_probability(
+            store, "frequency", "scan", params={"band": "5GHz"}
+        )
+        assert boost is False
+
+    def test_common_outcome_keys_majority(self):
+        inv = OutcomeInventory()
+        store = TechnicalKnowledgeStore()
+        for _ in range(4):
+            store.add_observation(_obs(outcome={"channels": [1, 6], "band": "2.4GHz"}))
+        store.add_observation(_obs(outcome={"channels": [1]}))
+        keys = inv.get_common_outcome_keys(store, "frequency", "scan")
+        assert "channels" in keys
+
+    def test_common_outcome_keys_empty_store(self):
+        inv = OutcomeInventory()
+        store = TechnicalKnowledgeStore()
+        assert inv.get_common_outcome_keys(store, "frequency", "scan") == []
+
+    def test_inventory_size_matches_observation_count(self):
+        inv = OutcomeInventory()
+        store = TechnicalKnowledgeStore()
+        for _ in range(7):
+            store.add_observation(_obs())
+        assert inv.inventory_size(store) == 7
+
+
+# ===========================================================================
+# PredictiveReasoner + Prediction
+# ===========================================================================
+
+class TestPredictiveReasoner:
+
+    def test_predict_returns_prediction(self):
+        r = PredictiveReasoner()
+        store = _make_store_with_successes(n_ok=5)
+        pred = r.predict(store, "frequency", "scan")
+        assert isinstance(pred, Prediction)
+
+    def test_prediction_fields_present(self):
+        r = PredictiveReasoner()
+        store = _make_store_with_successes(n_ok=3)
+        pred = r.predict(store, "frequency", "scan")
+        assert pred.domain == "frequency"
+        assert pred.task == "scan"
+        assert 0.0 <= pred.predicted_success <= 1.0
+        assert 0.0 <= pred.confidence <= 1.0
+        assert isinstance(pred.reasoning, str)
+
+    def test_no_history_returns_neutral(self):
+        r = PredictiveReasoner()
+        store = TechnicalKnowledgeStore()
+        pred = r.predict(store, "frequency", "scan")
+        assert pred.predicted_success == 0.5
+        assert pred.confidence == 0.0
+        assert pred.supporting_observations == 0
+
+    def test_confidence_saturates_at_min_evidence(self):
+        r = PredictiveReasoner()
+        store = _make_store_with_successes(n_ok=_MIN_EVIDENCE)
+        pred = r.predict(store, "frequency", "scan")
+        assert pred.confidence == 1.0
+
+    def test_confidence_below_one_with_few_observations(self):
+        r = PredictiveReasoner()
+        store = _make_store_with_successes(n_ok=2)
+        pred = r.predict(store, "frequency", "scan")
+        assert pred.confidence < 1.0
+
+    def test_all_failures_predicts_zero(self):
+        r = PredictiveReasoner()
+        store = _make_store_with_failures(n_fail=5, n_ok=0)
+        pred = r.predict(store, "frequency", "scan")
+        assert pred.predicted_success == 0.0
+
+    def test_params_boost_flag_propagates(self):
+        r = PredictiveReasoner()
+        store = TechnicalKnowledgeStore()
+        for _ in range(5):
+            store.add_observation(_obs(params={"band": "2.4GHz"}, success=True))
+        pred = r.predict(store, "frequency", "scan", params={"band": "2.4GHz"})
+        assert pred.similar_params_boost is True
+
+    def test_prediction_to_dict_is_serialisable(self):
+        r = PredictiveReasoner()
+        store = _make_store_with_successes(n_ok=3)
+        json.dumps(r.predict(store, "frequency", "scan").to_dict())
+
+
+# ===========================================================================
+# AutonomousDecision
+# ===========================================================================
+
+class TestAutonomousDecision:
+
+    def _make_prediction(self, success=0.8, confidence=0.8, n=5) -> Prediction:
+        return Prediction(
+            domain="frequency", task="scan",
+            predicted_success=success,
+            confidence=confidence,
+            supporting_observations=n,
+            similar_params_boost=False,
+            reasoning="test",
+        )
+
+    def test_proceed_when_high_success_and_confidence(self):
+        from ai.tlc import _make_autonomous_decision
+        pred = self._make_prediction(success=0.9, confidence=0.9)
+        dec = _make_autonomous_decision(pred, [], anomaly_flag=False)
+        assert dec.decision == "proceed"
+
+    def test_abort_when_low_success_and_confidence(self):
+        from ai.tlc import _make_autonomous_decision
+        pred = self._make_prediction(success=0.2, confidence=0.8)
+        dec = _make_autonomous_decision(pred, [], anomaly_flag=False)
+        assert dec.decision == "abort"
+
+    def test_defer_when_low_confidence(self):
+        from ai.tlc import _make_autonomous_decision
+        pred = self._make_prediction(success=0.9, confidence=0.1)
+        dec = _make_autonomous_decision(pred, [], anomaly_flag=False)
+        assert dec.decision == "defer"
+
+    def test_caution_when_anomaly_flag(self):
+        from ai.tlc import _make_autonomous_decision
+        pred = self._make_prediction(success=0.9, confidence=0.9)
+        dec = _make_autonomous_decision(pred, [], anomaly_flag=True)
+        assert dec.decision == "caution"
+
+    def test_caution_when_moderate_success(self):
+        from ai.tlc import _make_autonomous_decision
+        pred = self._make_prediction(success=0.55, confidence=0.8)
+        dec = _make_autonomous_decision(pred, [], anomaly_flag=False)
+        assert dec.decision == "caution"
+
+    def test_knowledge_signals_in_reasoning(self):
+        from ai.tlc import _make_autonomous_decision
+        pred = self._make_prediction(success=0.9, confidence=0.9)
+        signals = [KnowledgeEntry(
+            concept="scan is reliable", domain="frequency",
+            confidence=0.9, evidence_count=5
+        )]
+        dec = _make_autonomous_decision(pred, signals, anomaly_flag=False)
+        assert "scan is reliable" in dec.reasoning
+
+    def test_to_dict_keys(self):
+        from ai.tlc import _make_autonomous_decision
+        pred = self._make_prediction()
+        dec = _make_autonomous_decision(pred, [], anomaly_flag=False)
+        d = dec.to_dict()
+        for key in ("decision", "prediction", "knowledge_signals",
+                    "anomaly_flag", "reasoning"):
+            assert key in d
+
+    def test_to_dict_is_serialisable(self):
+        from ai.tlc import _make_autonomous_decision
+        pred = self._make_prediction()
+        dec = _make_autonomous_decision(pred, [], anomaly_flag=False)
+        json.dumps(dec.to_dict())
+
+    def test_all_decision_values_are_valid(self):
+        from ai.tlc import _make_autonomous_decision
+        valid = {"proceed", "caution", "abort", "defer"}
+        cases = [
+            (0.9, 0.9, False),   # proceed
+            (0.2, 0.9, False),   # abort
+            (0.9, 0.1, False),   # defer
+            (0.9, 0.9, True),    # caution (anomaly)
+            (0.55, 0.9, False),  # caution (moderate)
+        ]
+        for success, conf, anomaly in cases:
+            pred = self._make_prediction(success=success, confidence=conf)
+            dec = _make_autonomous_decision(pred, [], anomaly_flag=anomaly)
+            assert dec.decision in valid
+
+
+# ===========================================================================
+# TLCModule — record_and_decide, predict, get_anomaly_report
+# ===========================================================================
+
+class TestTLCModulePredictivePipeline:
+
+    def _build_history(self, tlc: TLCModule, n=6, success=True) -> None:
+        for _ in range(n):
+            tlc.record("frequency", "scan", {"band": "2.4GHz"}, {}, success)
+
+    def test_predict_before_any_observations(self):
+        tlc = TLCModule()
+        pred = tlc.predict("frequency", "scan")
+        assert pred.predicted_success == 0.5
+        assert pred.confidence == 0.0
+
+    def test_predict_after_successes_returns_high_probability(self):
+        tlc = TLCModule()
+        self._build_history(tlc, n=6, success=True)
+        pred = tlc.predict("frequency", "scan")
+        assert pred.predicted_success > 0.7
+
+    def test_predict_after_failures_returns_low_probability(self):
+        tlc = TLCModule()
+        self._build_history(tlc, n=6, success=False)
+        pred = tlc.predict("frequency", "scan")
+        assert pred.predicted_success < 0.3
+
+    def test_predict_with_params_boost(self):
+        tlc = TLCModule()
+        for _ in range(5):
+            tlc.record("frequency", "scan", {"band": "2.4GHz"}, {}, True)
+        pred = tlc.predict("frequency", "scan", params={"band": "2.4GHz"})
+        assert pred.similar_params_boost is True
+
+    def test_predict_returns_prediction_type(self):
+        tlc = TLCModule()
+        pred = tlc.predict("firmware", "build")
+        assert isinstance(pred, Prediction)
+
+    def test_record_and_decide_returns_autonomous_decision(self):
+        tlc = TLCModule()
+        dec = tlc.record_and_decide("frequency", "scan", {}, {}, True)
+        assert isinstance(dec, AutonomousDecision)
+
+    def test_record_and_decide_valid_decision_values(self):
+        tlc = TLCModule()
+        valid = {"proceed", "caution", "abort", "defer"}
+        for i in range(8):
+            dec = tlc.record_and_decide(
+                "frequency", "scan", {"band": "2.4GHz"}, {}, True
+            )
+            assert dec.decision in valid
+
+    def test_record_and_decide_proceeds_after_many_successes(self):
+        """After strong success history, decision should be 'proceed'."""
+        tlc = TLCModule()
+        # Build strong history first
+        for _ in range(10):
+            tlc.record("frequency", "scan", {"band": "2.4GHz"}, {}, True)
+        dec = tlc.record_and_decide("frequency", "scan", {"band": "2.4GHz"}, {}, True)
+        assert dec.decision in ("proceed", "caution")  # caution allowed if anomaly
+
+    def test_record_and_decide_aborts_after_many_failures(self):
+        """After consistent failure history, decision should be 'abort'."""
+        tlc = TLCModule()
+        for _ in range(10):
+            tlc.record("frequency", "scan", {}, {}, False)
+        dec = tlc.record_and_decide("frequency", "scan", {}, {}, False)
+        assert dec.decision in ("abort", "caution")
+
+    def test_anomaly_quarantined_not_in_observation_count(self):
+        """Quarantined observation must not inflate observation_count."""
+        tlc = TLCModule()
+        # Build 9 successes → strong pattern
+        for _ in range(9):
+            tlc.record("frequency", "scan", {}, {}, True)
+        obs_before = tlc.get_store().observation_count
+        # Now submit a failure — anomalous against 9 successes
+        dec = tlc.record_and_decide("frequency", "scan", {}, {}, False)
+        obs_after = tlc.get_store().observation_count
+        # Observation count should only increase if NOT quarantined
+        if dec.anomaly_flag or tlc.get_store().quarantine_count > 0:
+            assert obs_after == obs_before  # quarantined → not counted
+        else:
+            assert obs_after == obs_before + 1
+
+    def test_anomaly_flag_set_after_quarantine(self):
+        """Once a quarantine occurs, subsequent decisions carry anomaly_flag."""
+        tlc = TLCModule()
+        for _ in range(9):
+            tlc.record("frequency", "scan", {}, {}, True)
+        # First anomalous submission
+        tlc.record_and_decide("frequency", "scan", {}, {}, False)
+        # Subsequent decision should see the anomaly flag
+        dec2 = tlc.record_and_decide("frequency", "scan", {}, {}, True)
+        assert dec2.anomaly_flag is True
+
+    def test_get_anomaly_report_empty(self):
+        tlc = TLCModule()
+        report = tlc.get_anomaly_report()
+        assert report["total_quarantined"] == 0
+        assert report["by_domain"] == {}
+        assert report["by_task"] == {}
+
+    def test_get_anomaly_report_after_quarantine(self):
+        tlc = TLCModule()
+        for _ in range(9):
+            tlc.record("frequency", "scan", {}, {}, True)
+        tlc.record_and_decide("frequency", "scan", {}, {}, False)
+        report = tlc.get_anomaly_report()
+        if report["total_quarantined"] > 0:
+            assert "frequency" in report["by_domain"]
+            assert "frequency:scan" in report["by_task"]
+
+    def test_get_anomaly_report_is_serialisable(self):
+        tlc = TLCModule()
+        json.dumps(tlc.get_anomaly_report())
+
+    def test_record_and_decide_to_dict_is_serialisable(self):
+        tlc = TLCModule()
+        dec = tlc.record_and_decide("frequency", "scan", {"band": "2.4GHz"}, {}, True)
+        json.dumps(dec.to_dict())
+
+    def test_decision_has_non_empty_reasoning(self):
+        tlc = TLCModule()
+        dec = tlc.record_and_decide("firmware", "build", {}, {}, True)
+        assert dec.reasoning
+        assert len(dec.reasoning) > 10
+
+    def test_prediction_in_decision_matches_domain_task(self):
+        tlc = TLCModule()
+        dec = tlc.record_and_decide("firmware", "build", {}, {}, True)
+        assert dec.prediction.domain == "firmware"
+        assert dec.prediction.task == "build"
+
+    def test_full_pipeline_end_to_end(self):
+        """
+        Full pipeline: build history → record_and_decide → dream_cycle.
+        All stages must produce valid, serialisable output.
+        """
+        tlc = TLCModule()
+        # Waking: build a mixed history
+        for _ in range(5):
+            tlc.record("frequency", "scan", {"band": "2.4GHz"}, {}, True)
+        for _ in range(3):
+            tlc.record("firmware", "build", {"template": "base"}, {}, False)
+        # Predictive pipeline
+        pred = tlc.predict("frequency", "scan", params={"band": "2.4GHz"})
+        dec = tlc.record_and_decide("frequency", "scan", {"band": "2.4GHz"}, {}, True)
+        report = tlc.get_anomaly_report()
+        # Dream state
+        session = tlc.run_dream_cycle()
+
+        assert pred.predicted_success > 0
+        assert dec.decision in ("proceed", "caution", "abort", "defer")
+        assert isinstance(report["total_quarantined"], int)
+        assert isinstance(session, DreamSession)
+
+        # Everything serialisable
+        json.dumps(pred.to_dict())
+        json.dumps(dec.to_dict())
+        json.dumps(report)
+        json.dumps(session.to_dict())

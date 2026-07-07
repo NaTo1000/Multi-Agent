@@ -106,6 +106,27 @@ _MIND_STATUS_STRESSED: float = 0.35
 _EXPECTED_KNOWLEDGE_ENTRIES: int = 5
 
 # ---------------------------------------------------------------------------
+# Predictive pattern recognition constants
+# ---------------------------------------------------------------------------
+
+# Anomaly detection — deviation ≥ this triggers quarantine.
+_ANOMALY_THRESHOLD: float = 0.7
+
+# Minimum task-specific observations before anomaly detection activates.
+# Below this count the filter is fluid/lenient (insufficient baseline).
+_ANOMALY_MIN_HISTORY: int = _MIN_EVIDENCE
+
+# Recency weighting bounds for OutcomeInventory.
+# Oldest observation → _RECENCY_BASE; most recent → _RECENCY_PEAK.
+_RECENCY_BASE: float = 1.0
+_RECENCY_PEAK: float = 2.0   # most recent outcome has 2× influence
+
+# Autonomous decision thresholds.
+_DECISION_PROCEED: float = 0.70   # predicted_success ≥ this → "proceed"
+_DECISION_ABORT: float = 0.40    # predicted_success ≤ this → "abort"
+_DECISION_MIN_CONFIDENCE: float = 0.30  # below this → "defer"
+
+# ---------------------------------------------------------------------------
 # Algorithmic Protocols
 #
 # Each protocol maps a vulnerability trigger to an advisory recommendation
@@ -505,6 +526,8 @@ class TechnicalKnowledgeStore:
         self._domain_index: Dict[str, List[TechnicalObservation]] = defaultdict(list)
         self._device_index: Dict[str, List[TechnicalObservation]] = defaultdict(list)
         self._knowledge: Dict[str, KnowledgeEntry] = {}
+        # Quarantined anomalies — kept separate to preserve auditability.
+        self._quarantined: List[TechnicalObservation] = []
 
     # ------------------------------------------------------------------
     # Observation management
@@ -545,6 +568,23 @@ class TechnicalKnowledgeStore:
     def observation_count(self) -> int:
         """Total number of recorded observations."""
         return len(self._observations)
+
+    def add_quarantined(self, obs: TechnicalObservation) -> None:
+        """Quarantine an anomalous observation without adding it to the live index."""
+        self._quarantined.append(obs)
+        logger.debug(
+            "TLC quarantine | domain=%s task=%s device=%s",
+            obs.domain, obs.task, obs.device_id,
+        )
+
+    def get_quarantined(self) -> List[TechnicalObservation]:
+        """Return all quarantined observations."""
+        return list(self._quarantined)
+
+    @property
+    def quarantine_count(self) -> int:
+        """Total number of quarantined observations."""
+        return len(self._quarantined)
 
     # ------------------------------------------------------------------
     # Knowledge management
@@ -799,12 +839,467 @@ class PatternRecognizer:
 
 
 # ---------------------------------------------------------------------------
+# Predictive Pattern Recognition dataclasses
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class AnomalyRecord:
+    """
+    Assessment produced by :class:`AnomalyFilter` for one incoming observation.
+
+    Attributes:
+        observation:       The observation that was assessed.
+        anomaly_score:     Deviation from the established (domain, task) pattern
+                           (0.0 = normal, 1.0 = maximum deviation).
+        established_rate:  Historical success rate used as baseline.
+        history_size:      Number of prior observations that formed the baseline.
+        is_quarantined:    True when ``anomaly_score ≥ _ANOMALY_THRESHOLD``.
+        reason:            Human-readable explanation of the assessment.
+    """
+
+    observation: TechnicalObservation
+    anomaly_score: float
+    established_rate: float
+    history_size: int
+    is_quarantined: bool
+    reason: str
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "observation": self.observation.to_dict(),
+            "anomaly_score": round(self.anomaly_score, 3),
+            "established_rate": round(self.established_rate, 3),
+            "history_size": self.history_size,
+            "is_quarantined": self.is_quarantined,
+            "reason": self.reason,
+        }
+
+
+@dataclass
+class Prediction:
+    """
+    Outcome prediction for a (domain, task, params) query.
+
+    All values are derived exclusively from the inventoried observation
+    history — no simulated or fabricated data.
+
+    Attributes:
+        domain:                  Target domain.
+        task:                    Target task.
+        predicted_success:       Recency-weighted success probability (0–1).
+        confidence:              Evidence saturation — grows toward 1.0 as
+                                 ``supporting_observations`` reaches
+                                 ``_MIN_EVIDENCE``.
+        supporting_observations: Observations used to form the prediction.
+        similar_params_boost:    True when the prediction was narrowed by
+                                 parameter-similarity matching.
+        reasoning:               Human-readable prediction rationale.
+    """
+
+    domain: str
+    task: str
+    predicted_success: float
+    confidence: float
+    supporting_observations: int
+    similar_params_boost: bool
+    reasoning: str
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "domain": self.domain,
+            "task": self.task,
+            "predicted_success": round(self.predicted_success, 3),
+            "confidence": round(self.confidence, 3),
+            "supporting_observations": self.supporting_observations,
+            "similar_params_boost": self.similar_params_boost,
+            "reasoning": self.reasoning,
+        }
+
+
+@dataclass
+class AutonomousDecision:
+    """
+    The TLC's self-derived recommendation for a pending or just-completed task.
+
+    Derived entirely from accumulated observations, predictions, and knowledge
+    entries — no external oracle, no simulation.
+
+    Attributes:
+        decision:          ``"proceed"`` | ``"caution"`` | ``"abort"`` |
+                           ``"defer"``.
+        prediction:        The underlying outcome prediction.
+        knowledge_signals: Top knowledge entries that influenced the decision.
+        anomaly_flag:      True when recent quarantined anomalies exist for
+                           this (domain, task) pair.
+        reasoning:         Full decision reasoning chain.
+    """
+
+    decision: str
+    prediction: Prediction
+    knowledge_signals: List[KnowledgeEntry]
+    anomaly_flag: bool
+    reasoning: str
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "decision": self.decision,
+            "prediction": self.prediction.to_dict(),
+            "knowledge_signals": [k.to_dict() for k in self.knowledge_signals],
+            "anomaly_flag": self.anomaly_flag,
+            "reasoning": self.reasoning,
+        }
+
+
+# ---------------------------------------------------------------------------
+# Predictive Pattern Recognition helpers
+# ---------------------------------------------------------------------------
+
+
+def _make_autonomous_decision(
+    prediction: Prediction,
+    knowledge_signals: List[KnowledgeEntry],
+    anomaly_flag: bool,
+) -> AutonomousDecision:
+    """
+    Derive an :class:`AutonomousDecision` from prediction signals.
+
+    Decision matrix
+    ---------------
+    confidence < _DECISION_MIN_CONFIDENCE          → ``"defer"``
+    anomaly_flag AND confidence ≥ min              → ``"caution"``
+    predicted_success ≥ _DECISION_PROCEED          → ``"proceed"``
+    predicted_success ≤ _DECISION_ABORT            → ``"abort"``
+    otherwise                                      → ``"caution"``
+    """
+    if prediction.confidence < _DECISION_MIN_CONFIDENCE:
+        decision = "defer"
+        reason = (
+            f"Confidence too low ({prediction.confidence:.0%}) — "
+            f"only {prediction.supporting_observations} inventoried outcome(s) "
+            f"for '{prediction.task}' in '{prediction.domain}'.  "
+            "Collecting more data before committing."
+        )
+    elif anomaly_flag:
+        decision = "caution"
+        reason = (
+            f"Anomalies detected for '{prediction.task}' in '{prediction.domain}'.  "
+            f"Predicted success {prediction.predicted_success:.0%} "
+            f"({prediction.confidence:.0%} confidence) but anomalous observations "
+            "have been quarantined — proceed with heightened monitoring."
+        )
+    elif prediction.predicted_success >= _DECISION_PROCEED:
+        decision = "proceed"
+        reason = (
+            f"High success probability ({prediction.predicted_success:.0%}) "
+            f"with {prediction.confidence:.0%} confidence from "
+            f"{prediction.supporting_observations} inventoried outcome(s).  "
+            "All signals green."
+        )
+    elif prediction.predicted_success <= _DECISION_ABORT:
+        decision = "abort"
+        reason = (
+            f"Low success probability ({prediction.predicted_success:.0%}) "
+            f"with {prediction.confidence:.0%} confidence.  "
+            "Historical inventory indicates this task is likely to fail."
+        )
+    else:
+        decision = "caution"
+        reason = (
+            f"Moderate success probability ({prediction.predicted_success:.0%}) "
+            f"({prediction.confidence:.0%} confidence).  "
+            "Proceed with caution and monitor the outcome closely."
+        )
+
+    # Append relevant knowledge signals
+    if knowledge_signals:
+        snippets = "; ".join(e.concept[:80] for e in knowledge_signals[:3])
+        reason += f"  Relevant knowledge: {snippets}."
+
+    return AutonomousDecision(
+        decision=decision,
+        prediction=prediction,
+        knowledge_signals=knowledge_signals,
+        anomaly_flag=anomaly_flag,
+        reasoning=reason,
+    )
+
+
+# ---------------------------------------------------------------------------
+# AnomalyFilter
+# ---------------------------------------------------------------------------
+
+
+class AnomalyFilter:
+    """
+    Fluid adaptive anomaly detector for incoming :class:`TechnicalObservation`
+    objects.
+
+    The filter is *fluid* — its effective sensitivity adapts to the amount of
+    evidence available for the (domain, task) pair being evaluated:
+
+    * **Insufficient history** (< ``_ANOMALY_MIN_HISTORY`` prior observations):
+      Detection is suppressed.  The baseline is too sparse to distinguish a
+      genuine anomaly from natural variance.
+
+    * **Established history** (≥ ``_ANOMALY_MIN_HISTORY`` observations):
+      ``anomaly_score = |established_success_rate − actual_outcome|``
+      where ``actual_outcome = 1.0`` for success, ``0.0`` for failure.
+      Scores ≥ ``_ANOMALY_THRESHOLD`` trigger quarantine.
+
+    Quarantined observations are routed to the store's quarantine list so they
+    cannot corrupt the live knowledge base while remaining auditable.
+    """
+
+    def check(
+        self,
+        obs: TechnicalObservation,
+        store: TechnicalKnowledgeStore,
+    ) -> AnomalyRecord:
+        """
+        Assess *obs* against the established pattern in *store*.
+
+        *obs* must NOT yet have been added to *store* so that the baseline
+        reflects only prior observations.
+
+        Args:
+            obs:   Incoming observation (pre-insertion).
+            store: Live store providing the historical baseline.
+
+        Returns:
+            An :class:`AnomalyRecord` with the full assessment.
+        """
+        # Build baseline from same-domain, same-task observations
+        task_history = [
+            o for o in store.get_observations(domain=obs.domain)
+            if o.task == obs.task
+        ]
+        n = len(task_history)
+
+        if n < _ANOMALY_MIN_HISTORY:
+            return AnomalyRecord(
+                observation=obs,
+                anomaly_score=0.0,
+                established_rate=0.5,
+                history_size=n,
+                is_quarantined=False,
+                reason=(
+                    f"Insufficient baseline ({n}/{_ANOMALY_MIN_HISTORY} "
+                    "observations) — anomaly detection suppressed."
+                ),
+            )
+
+        established_rate = sum(1 for o in task_history if o.success) / n
+        actual = 1.0 if obs.success else 0.0
+        anomaly_score = round(abs(established_rate - actual), 3)
+        is_quarantined = anomaly_score >= _ANOMALY_THRESHOLD
+
+        if is_quarantined:
+            reason = (
+                f"Deviation from established pattern: success_rate={established_rate:.2f}, "
+                f"this_outcome={'success' if obs.success else 'failure'}, "
+                f"anomaly_score={anomaly_score:.2f} ≥ threshold {_ANOMALY_THRESHOLD}.  "
+                "Quarantined."
+            )
+        else:
+            reason = (
+                f"Within normal range: success_rate={established_rate:.2f}, "
+                f"anomaly_score={anomaly_score:.2f} < threshold {_ANOMALY_THRESHOLD}."
+            )
+
+        return AnomalyRecord(
+            observation=obs,
+            anomaly_score=anomaly_score,
+            established_rate=round(established_rate, 3),
+            history_size=n,
+            is_quarantined=is_quarantined,
+            reason=reason,
+        )
+
+
+# ---------------------------------------------------------------------------
+# OutcomeInventory
+# ---------------------------------------------------------------------------
+
+
+class OutcomeInventory:
+    """
+    Recency-weighted statistical query engine over a
+    :class:`TechnicalKnowledgeStore`.
+
+    The inventory scales with the store's observation count — the architecture
+    supports cataloguing millions of perceived outcomes.  All queries are
+    O(n) over the relevant (domain, task) subset.
+
+    Recency weighting
+    -----------------
+    Each observation receives a weight proportional to its position in the
+    ordered observation list::
+
+        weight_i = _RECENCY_BASE + (_RECENCY_PEAK − _RECENCY_BASE) × (i / (n−1))
+
+    Oldest observation (i=0) → ``_RECENCY_BASE`` (1.0).
+    Newest observation (i=n-1) → ``_RECENCY_PEAK`` (2.0).
+
+    This ensures recent outcomes have greater influence on predictions without
+    discarding older evidence — a fluid, continuously updating inventory.
+
+    Parameter similarity
+    --------------------
+    When ``params`` are provided, the inventory first attempts to narrow the
+    candidate set to observations sharing at least one tracked parameter value.
+    If at least two matching observations exist the prediction is refined using
+    only those observations (``similar_params_boost=True``).
+    """
+
+    def get_success_probability(
+        self,
+        store: TechnicalKnowledgeStore,
+        domain: str,
+        task: str,
+        params: Optional[Dict[str, Any]] = None,
+    ) -> Tuple[float, int, bool]:
+        """
+        Compute recency-weighted success probability for (domain, task).
+
+        Returns:
+            Tuple of
+            ``(probability: float, n_observations: int, params_boost: bool)``.
+        """
+        candidates = [
+            o for o in store.get_observations(domain=domain)
+            if o.task == task
+        ]
+        if not candidates:
+            return 0.5, 0, False
+
+        params_boost = False
+        if params:
+            matching = [
+                o for o in candidates
+                if any(
+                    o.params.get(k) is not None and o.params.get(k) == params.get(k)
+                    for k in _TRACKED_PARAMS
+                )
+            ]
+            if len(matching) >= 2:
+                candidates = matching
+                params_boost = True
+
+        n = len(candidates)
+        weights = [
+            _RECENCY_BASE + (_RECENCY_PEAK - _RECENCY_BASE) * (i / max(n - 1, 1))
+            for i in range(n)
+        ]
+        weighted_success = sum(
+            w * (1.0 if o.success else 0.0)
+            for w, o in zip(weights, candidates)
+        )
+        total_weight = sum(weights)
+        probability = round(weighted_success / total_weight, 3) if total_weight > 0 else 0.5
+
+        return probability, n, params_boost
+
+    def get_common_outcome_keys(
+        self,
+        store: TechnicalKnowledgeStore,
+        domain: str,
+        task: str,
+    ) -> List[str]:
+        """
+        Return outcome dict keys that appear in ≥ 50 % of (domain, task)
+        observations.
+        """
+        candidates = [
+            o for o in store.get_observations(domain=domain)
+            if o.task == task
+        ]
+        if not candidates:
+            return []
+        n = len(candidates)
+        key_counts: Dict[str, int] = defaultdict(int)
+        for o in candidates:
+            for k in o.outcome:
+                key_counts[k] += 1
+        return [k for k, count in key_counts.items() if count / n >= 0.5]
+
+    def inventory_size(self, store: TechnicalKnowledgeStore) -> int:
+        """Total number of outcomes inventoried in *store*."""
+        return store.observation_count
+
+
+# ---------------------------------------------------------------------------
+# PredictiveReasoner
+# ---------------------------------------------------------------------------
+
+
+class PredictiveReasoner:
+    """
+    Generates outcome :class:`Prediction` objects by combining
+    :class:`OutcomeInventory` statistics with knowledge-entry signals.
+
+    The reasoner feeds the reactive pipeline back into a proactive
+    algorithmic procedure: past observations → recency-weighted probability
+    → calibrated prediction → :class:`AutonomousDecision`.
+    """
+
+    def __init__(self) -> None:
+        self._inventory = OutcomeInventory()
+
+    def predict(
+        self,
+        store: TechnicalKnowledgeStore,
+        domain: str,
+        task: str,
+        params: Optional[Dict[str, Any]] = None,
+    ) -> Prediction:
+        """
+        Predict the likely outcome of (domain, task, params).
+
+        Args:
+            store:  Live :class:`TechnicalKnowledgeStore`.
+            domain: Target domain.
+            task:   Target task identifier.
+            params: Optional task parameters for similarity-based narrowing.
+
+        Returns:
+            A :class:`Prediction` with probability, confidence, and reasoning.
+        """
+        probability, n_obs, params_boost = self._inventory.get_success_probability(
+            store, domain, task, params
+        )
+        confidence = round(min(1.0, n_obs / _MIN_EVIDENCE), 3)
+
+        parts: List[str] = []
+        if n_obs == 0:
+            parts.append(
+                f"No inventoried outcomes for '{task}' in '{domain}'.  "
+                "Defaulting to neutral prior (50 %)."
+            )
+        else:
+            parts.append(
+                f"{n_obs} inventoried outcome(s) for '{task}' in '{domain}'."
+            )
+            if params_boost:
+                parts.append("Prediction refined by parameter-similarity matching.")
+            parts.append(
+                f"Recency-weighted success probability: {probability:.0%}.  "
+                f"Confidence: {confidence:.0%}."
+            )
+
+        return Prediction(
+            domain=domain,
+            task=task,
+            predicted_success=probability,
+            confidence=confidence,
+            supporting_observations=n_obs,
+            similar_params_boost=params_boost,
+            reasoning="  ".join(parts),
+        )
+
+
+# ---------------------------------------------------------------------------
 # TLCModule
-# ---------------------------------------------------------------------------
-
-
-# ---------------------------------------------------------------------------
-# DreamStateEngine
 # ---------------------------------------------------------------------------
 
 
@@ -1317,10 +1812,11 @@ class TLCModule:
     self-testing in a single, reusable interface.
 
     Args:
-        store:        Optional external :class:`TechnicalKnowledgeStore`.
-                      Provide one to share state with other components.
-        recognizer:   Optional external :class:`PatternRecognizer`.
-        dream_engine: Optional external :class:`DreamStateEngine`.
+        store:          Optional external :class:`TechnicalKnowledgeStore`.
+        recognizer:     Optional external :class:`PatternRecognizer`.
+        dream_engine:   Optional external :class:`DreamStateEngine`.
+        anomaly_filter: Optional external :class:`AnomalyFilter`.
+        reasoner:       Optional external :class:`PredictiveReasoner`.
     """
 
     def __init__(
@@ -1328,10 +1824,14 @@ class TLCModule:
         store: Optional[TechnicalKnowledgeStore] = None,
         recognizer: Optional[PatternRecognizer] = None,
         dream_engine: Optional[DreamStateEngine] = None,
+        anomaly_filter: Optional["AnomalyFilter"] = None,
+        reasoner: Optional["PredictiveReasoner"] = None,
     ) -> None:
         self._store = store or TechnicalKnowledgeStore()
         self._recognizer = recognizer or PatternRecognizer()
         self._dream_engine = dream_engine or DreamStateEngine()
+        self._anomaly_filter = anomaly_filter or AnomalyFilter()
+        self._reasoner = reasoner or PredictiveReasoner()
 
     # ------------------------------------------------------------------
     # Public API
@@ -1448,3 +1948,132 @@ class TLCModule:
     def get_store(self) -> TechnicalKnowledgeStore:
         """Return the underlying :class:`TechnicalKnowledgeStore`."""
         return self._store
+
+    # ------------------------------------------------------------------
+    # Predictive pipeline
+    # ------------------------------------------------------------------
+
+    def record_and_decide(
+        self,
+        domain: str,
+        task: str,
+        params: Dict[str, Any],
+        outcome: Dict[str, Any],
+        success: bool,
+        device_id: Optional[str] = None,
+    ) -> AutonomousDecision:
+        """
+        Record a task outcome through the full fluid predictive pipeline and
+        return the TLC's autonomous decision.
+
+        Pipeline
+        --------
+        1. **Anomaly check** (pre-insertion) — :class:`AnomalyFilter` computes
+           the deviation from the established (domain, task) baseline.  If the
+           observation is anomalous it is quarantined and excluded from the
+           live knowledge base.
+        2. **Knowledge update** — non-anomalous observations are added to the
+           store and :class:`PatternRecognizer` re-derives knowledge entries.
+        3. **Prediction** — :class:`PredictiveReasoner` generates a
+           recency-weighted outcome :class:`Prediction` from the full
+           :class:`OutcomeInventory`.
+        4. **Decision** — combines prediction, knowledge signals, and anomaly
+           state into an :class:`AutonomousDecision`.
+
+        Args:
+            domain:    Functional domain.
+            task:      Task identifier.
+            params:    Task parameters.
+            outcome:   Task result dict.
+            success:   Whether the task succeeded.
+            device_id: Optional target device.
+
+        Returns:
+            An :class:`AutonomousDecision` representing the TLC's
+            self-derived reactive recommendation.
+        """
+        obs = TechnicalObservation(
+            domain=domain,
+            task=task,
+            params=params,
+            outcome=outcome,
+            success=success,
+            device_id=device_id,
+        )
+
+        # Step 1 — anomaly check (obs not yet in store)
+        anomaly_record = self._anomaly_filter.check(obs, self._store)
+
+        # Step 2 — route observation
+        if anomaly_record.is_quarantined:
+            self._store.add_quarantined(obs)
+            logger.warning(
+                "TLC quarantine | domain=%s task=%s anomaly_score=%.2f",
+                domain, task, anomaly_record.anomaly_score,
+            )
+        else:
+            self._store.add_observation(obs)
+            self._recognizer.analyse(self._store)
+
+        # Step 3 — prediction
+        prediction = self._reasoner.predict(self._store, domain, task, params)
+
+        # Step 4 — anomaly flag (any quarantined for this domain+task)
+        anomaly_flag = any(
+            q.domain == domain and q.task == task
+            for q in self._store.get_quarantined()
+        )
+
+        # Gather top relevant knowledge signals
+        knowledge_signals = self._store.get_knowledge(
+            domain=domain, tags=[task], min_confidence=0.3
+        )[:3]
+
+        decision = _make_autonomous_decision(prediction, knowledge_signals, anomaly_flag)
+
+        logger.info(
+            "TLC decision | domain=%s task=%s decision=%s predicted_success=%.2f confidence=%.2f",
+            domain, task, decision.decision,
+            prediction.predicted_success, prediction.confidence,
+        )
+        return decision
+
+    def predict(
+        self,
+        domain: str,
+        task: str,
+        params: Optional[Dict[str, Any]] = None,
+    ) -> Prediction:
+        """
+        Predict the likely outcome of a (domain, task, params) **before**
+        execution, using the full inventoried observation history.
+
+        Args:
+            domain: Target domain.
+            task:   Target task identifier.
+            params: Optional parameters for similarity-based narrowing.
+
+        Returns:
+            A :class:`Prediction` with probability, confidence, and reasoning.
+        """
+        return self._reasoner.predict(self._store, domain, task, params)
+
+    def get_anomaly_report(self) -> Dict[str, Any]:
+        """
+        Return a structured summary of all quarantined anomalous observations.
+
+        Returns:
+            A dict with ``total_quarantined``, ``by_domain``, and ``by_task``
+            breakdowns.
+        """
+        quarantined = self._store.get_quarantined()
+        by_domain: Dict[str, int] = defaultdict(int)
+        by_task: Dict[str, int] = defaultdict(int)
+        for q in quarantined:
+            by_domain[q.domain] += 1
+            by_task[f"{q.domain}:{q.task}"] += 1
+        return {
+            "total_quarantined": len(quarantined),
+            "by_domain": dict(by_domain),
+            "by_task": dict(by_task),
+        }
