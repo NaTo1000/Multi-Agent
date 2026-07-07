@@ -61,6 +61,7 @@ from __future__ import annotations
 
 import copy
 import logging
+import time
 import uuid
 from collections import defaultdict
 from dataclasses import dataclass, field
@@ -184,6 +185,128 @@ _PROTOCOLS: Dict[str, Dict[str, Any]] = {
         ),
         "adjustment": {"band_sanitisation": True},
     },
+}
+
+# ---------------------------------------------------------------------------
+# Voice analysis constants
+# ---------------------------------------------------------------------------
+
+# Emotional state identifiers (voice-derived)
+EMOTION_CALM: str = "calm"
+EMOTION_EXCITED: str = "excited"
+EMOTION_DISTRESSED: str = "distressed"
+EMOTION_UNCERTAIN: str = "uncertain"
+EMOTION_ASSERTIVE: str = "assertive"
+
+# Pitch (Hz) classification thresholds
+_VOICE_PITCH_LOW: float = 120.0        # ≤ this Hz → calm / authoritative
+_VOICE_PITCH_HIGH: float = 250.0       # ≥ this Hz → excited / distressed
+_VOICE_PITCH_RAPID_DELTA: float = 80.0 # Hz/s rate-of-change → assertive under pressure
+
+# Speech rate (words per minute) thresholds
+_VOICE_SPEED_SLOW: float = 100.0       # ≤ WPM → deliberate / uncertain
+_VOICE_SPEED_FAST: float = 180.0       # ≥ WPM → excited / anxious
+
+# VoiceFrames to accumulate before grouping a SentencePattern
+_SENTENCE_WINDOW: int = 5
+
+# Silence gap (ms) that forces a sentence-boundary flush
+_SENTENCE_GAP_MS: float = 200.0
+
+# Minimum similarity score for compassion inventory lookup hits
+_COMPASSION_SIM_THRESHOLD: float = 0.50
+
+# Real-time differential time slice (ms) between TWINBRAiN response variants
+_TWINBRAIN_SLICE_MS: float = 1.0
+
+# ---------------------------------------------------------------------------
+# Cortex Council synthesis protocols
+#
+# Maps each detected emotional state to an advisory neuromodulator synthesis
+# command for the Cortex Council.  All commands are advisory only.
+# ---------------------------------------------------------------------------
+
+_CORTEX_COUNCIL_PROTOCOLS: Dict[str, Dict[str, Any]] = {
+    EMOTION_CALM: {
+        "neuromodulator": "serotonin_stabilise",
+        "synthesis_intensity": 0.3,
+        "command": "MAINTAIN_BASELINE",
+        "rationale": (
+            "Calm state detected — maintain current neuromodulator baseline "
+            "with light serotonin stabilisation."
+        ),
+    },
+    EMOTION_EXCITED: {
+        "neuromodulator": "dopamine_temper",
+        "synthesis_intensity": 0.6,
+        "command": "TEMPER_AROUSAL",
+        "rationale": (
+            "Elevated arousal detected — temper dopaminergic over-drive to "
+            "prevent pattern-recognition noise."
+        ),
+    },
+    EMOTION_DISTRESSED: {
+        "neuromodulator": "cortisol_reduce",
+        "synthesis_intensity": 0.9,
+        "command": "REDUCE_STRESS_SIGNAL",
+        "rationale": (
+            "Distress signature in vocal pattern — initiate cortisol-reduction "
+            "synthesis and activate compassion protocol."
+        ),
+    },
+    EMOTION_UNCERTAIN: {
+        "neuromodulator": "acetylcholine_boost",
+        "synthesis_intensity": 0.5,
+        "command": "BOOST_CLARITY",
+        "rationale": (
+            "Uncertainty markers detected — boost acetylcholinergic signalling "
+            "to sharpen attention and working memory."
+        ),
+    },
+    EMOTION_ASSERTIVE: {
+        "neuromodulator": "norepinephrine_calibrate",
+        "synthesis_intensity": 0.4,
+        "command": "CALIBRATE_DRIVE",
+        "rationale": (
+            "Assertive vocal signature — calibrate norepinephrine to sustain "
+            "focused action without over-arousal."
+        ),
+    },
+}
+
+# ---------------------------------------------------------------------------
+# TWINBRAiN compassion response templates
+#
+# Seeded per emotional state; format placeholders: {tags}, {intensity}.
+# New responses accumulate in CompassionInventory through live interaction.
+# ---------------------------------------------------------------------------
+
+_COMPASSION_TEMPLATES: Dict[str, List[str]] = {
+    EMOTION_CALM: [
+        "A grounded calm is present. Building on this stable foundation for {tags}.",
+        "Composed energy ({intensity} intensity) supports clear thinking around {tags}.",
+        "A steady presence — an ideal state for processing {tags} constructively.",
+    ],
+    EMOTION_EXCITED: [
+        "Excitement ({intensity}) about {tags} is a powerful force — channelling it precisely.",
+        "High arousal in {tags} context. Here to help focus that energy productively.",
+        "Enthusiasm is driving the signal. A brief pause can sharpen the response to {tags}.",
+    ],
+    EMOTION_DISTRESSED: [
+        "Significant distress is registered around {tags}. You are not alone in this moment.",
+        "The weight of {tags} is felt. Grounding can begin to ease the intensity ({intensity}).",
+        "Distress signal acknowledged. Your response to {tags} is valid — a steady path exists.",
+    ],
+    EMOTION_UNCERTAIN: [
+        "Uncertainty about {tags} is a signal, not a failure — it means paying attention.",
+        "Ambiguity in {tags} is real. Mapping what is known and unknown, step by step.",
+        "Not knowing ({intensity} uncertainty) is the starting point for genuine understanding of {tags}.",
+    ],
+    EMOTION_ASSERTIVE: [
+        "Strong directed energy around {tags} — this clarity of purpose moves things forward.",
+        "Assertive stance ({intensity}). Precision here will amplify impact on {tags}.",
+        "Decisive energy in {tags} context. Alignment check before acting sharpens the outcome.",
+    ],
 }
 
 
@@ -952,6 +1075,220 @@ class AutonomousDecision:
 
 
 # ---------------------------------------------------------------------------
+# Voice analysis dataclasses
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class VoiceFrame:
+    """
+    A single captured voice sample with acoustic features.
+
+    Attributes:
+        frame_id:      Unique identifier for this frame.
+        timestamp_ms:  Wall-clock millisecond timestamp (time.time() × 1000).
+        pitch_hz:      Fundamental frequency in Hz (0 = unvoiced/silent).
+        speed_wpm:     Estimated words-per-minute at this moment.
+        amplitude_db:  RMS amplitude in dBFS (negative; 0 = maximum level).
+        text_fragment: Transcribed text for this frame window (may be empty).
+    """
+
+    frame_id: str = field(default_factory=lambda: str(uuid.uuid4())[:8])
+    timestamp_ms: float = field(default_factory=lambda: time.time() * 1000)
+    pitch_hz: float = 0.0
+    speed_wpm: float = 120.0
+    amplitude_db: float = -20.0
+    text_fragment: str = ""
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "frame_id": self.frame_id,
+            "timestamp_ms": round(self.timestamp_ms, 3),
+            "pitch_hz": round(self.pitch_hz, 2),
+            "speed_wpm": round(self.speed_wpm, 2),
+            "amplitude_db": round(self.amplitude_db, 2),
+            "text_fragment": self.text_fragment,
+        }
+
+
+@dataclass
+class PitchContour:
+    """
+    Aggregated pitch analysis computed over a sentence window.
+
+    Attributes:
+        mean_pitch:           Mean fundamental frequency across the window (Hz).
+        pitch_variance:       Variance of pitch values (Hz²) — higher = more
+                              expressive / emotionally variable.
+        pitch_delta_hz_per_sec: Mean absolute rate of pitch change between
+                              consecutive frames (Hz/s) — higher = more
+                              rapid vocal change.
+        inflection_count:     Number of pitch direction inversions — higher
+                              values indicate interrogative or complex prosody.
+        trend:                Overall pitch direction: ``"rising"``,
+                              ``"falling"``, ``"neutral"``, or ``"variable"``.
+    """
+
+    mean_pitch: float
+    pitch_variance: float
+    pitch_delta_hz_per_sec: float
+    inflection_count: int
+    trend: str
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "mean_pitch": round(self.mean_pitch, 2),
+            "pitch_variance": round(self.pitch_variance, 2),
+            "pitch_delta_hz_per_sec": round(self.pitch_delta_hz_per_sec, 2),
+            "inflection_count": self.inflection_count,
+            "trend": self.trend,
+        }
+
+
+@dataclass
+class SentencePattern:
+    """
+    A window of :class:`VoiceFrame` objects grouped as a sentence unit.
+
+    Attributes:
+        pattern_id:   Unique identifier.
+        frames:       Constituent voice frames.
+        contour:      Computed pitch contour over these frames.
+        mean_speed:   Mean speech rate (WPM) across the window.
+        pattern_type: Prosodic classification — ``"declarative"``,
+                      ``"interrogative"``, ``"exclamatory"``, or
+                      ``"trailing"``.
+        duration_ms:  Elapsed time from first to last frame (ms).
+    """
+
+    pattern_id: str = field(default_factory=lambda: str(uuid.uuid4())[:8])
+    frames: List[VoiceFrame] = field(default_factory=list)
+    contour: Optional[PitchContour] = None
+    mean_speed: float = 0.0
+    pattern_type: str = "declarative"
+    duration_ms: float = 0.0
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "pattern_id": self.pattern_id,
+            "frame_count": len(self.frames),
+            "contour": self.contour.to_dict() if self.contour else None,
+            "mean_speed": round(self.mean_speed, 2),
+            "pattern_type": self.pattern_type,
+            "duration_ms": round(self.duration_ms, 2),
+        }
+
+
+@dataclass
+class EmotionalState:
+    """
+    Emotional state derived from pitch contour and speech speed.
+
+    Attributes:
+        emotion:          One of the ``EMOTION_*`` constants.
+        intensity:        Normalised intensity in [0.0, 1.0].
+        pitch_signature:  The :class:`PitchContour` that drove the classification.
+        sentence_pattern: The :class:`SentencePattern` source window.
+        timestamp_ms:     Wall-clock timestamp of derivation.
+        confidence:       Evidence saturation factor — grows toward 1.0 as
+                          the window contains more voiced frames.
+    """
+
+    emotion: str
+    intensity: float
+    pitch_signature: PitchContour
+    sentence_pattern: SentencePattern
+    timestamp_ms: float = field(default_factory=lambda: time.time() * 1000)
+    confidence: float = 0.0
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "emotion": self.emotion,
+            "intensity": round(self.intensity, 3),
+            "pitch_signature": self.pitch_signature.to_dict(),
+            "sentence_pattern": self.sentence_pattern.to_dict(),
+            "timestamp_ms": round(self.timestamp_ms, 3),
+            "confidence": round(self.confidence, 3),
+        }
+
+
+@dataclass
+class CortexCouncilRecommendation:
+    """
+    Advisory command issued to the Cortex Council for emotional-feel synthesis.
+
+    Attributes:
+        recommendation_id: Unique identifier.
+        emotional_state:   The :class:`EmotionalState` that triggered this.
+        command:           Synthesis directive (e.g. ``"REDUCE_STRESS_SIGNAL"``).
+        neuromodulator:    Target neuromodulator pathway.
+        synthesis_intensity: Scaled synthesis level in [0.0, 1.0] — product of
+                           the protocol baseline and detected emotion intensity.
+        rationale:         Human-readable explanation.
+        timestamp_ms:      Wall-clock timestamp.
+    """
+
+    recommendation_id: str = field(default_factory=lambda: str(uuid.uuid4())[:8])
+    emotional_state: Optional[EmotionalState] = None
+    command: str = ""
+    neuromodulator: str = ""
+    synthesis_intensity: float = 0.0
+    rationale: str = ""
+    timestamp_ms: float = field(default_factory=lambda: time.time() * 1000)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "recommendation_id": self.recommendation_id,
+            "emotional_state": (
+                self.emotional_state.to_dict() if self.emotional_state else None
+            ),
+            "command": self.command,
+            "neuromodulator": self.neuromodulator,
+            "synthesis_intensity": round(self.synthesis_intensity, 3),
+            "rationale": self.rationale,
+            "timestamp_ms": round(self.timestamp_ms, 3),
+        }
+
+
+@dataclass
+class CompassionResponse:
+    """
+    A TWINBRAiN compassion response pattern.
+
+    Responses are stored in :class:`CompassionInventory` and retrieved
+    via similarity search (emotional trigger + situational Jaccard overlap).
+
+    Attributes:
+        response_id:      Unique identifier.
+        emotional_trigger: The ``EMOTION_*`` constant that generated this.
+        situational_tags: Contextual tags active when the response was created.
+        response_text:    The compassion response statement.
+        resonance_score:  Fit quality in [0.0, 1.0]; updated by feedback.
+        timestamp_ms:     Wall-clock timestamp.
+        effective:        ``True`` / ``False`` once evaluated; ``None`` pending.
+    """
+
+    response_id: str = field(default_factory=lambda: str(uuid.uuid4())[:8])
+    emotional_trigger: str = ""
+    situational_tags: List[str] = field(default_factory=list)
+    response_text: str = ""
+    resonance_score: float = 0.0
+    timestamp_ms: float = field(default_factory=lambda: time.time() * 1000)
+    effective: Optional[bool] = None
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "response_id": self.response_id,
+            "emotional_trigger": self.emotional_trigger,
+            "situational_tags": list(self.situational_tags),
+            "response_text": self.response_text,
+            "resonance_score": round(self.resonance_score, 3),
+            "timestamp_ms": round(self.timestamp_ms, 3),
+            "effective": self.effective,
+        }
+
+
+# ---------------------------------------------------------------------------
 # Predictive Pattern Recognition helpers
 # ---------------------------------------------------------------------------
 
@@ -1023,6 +1360,154 @@ def _make_autonomous_decision(
         anomaly_flag=anomaly_flag,
         reasoning=reason,
     )
+
+
+# ---------------------------------------------------------------------------
+# Voice analysis helpers
+# ---------------------------------------------------------------------------
+
+
+def _compute_pitch_contour(frames: List[VoiceFrame]) -> PitchContour:
+    """
+    Compute a :class:`PitchContour` from a list of :class:`VoiceFrame` objects.
+
+    All voiced frames (``pitch_hz > 0``) contribute to the statistics.
+    Silent / unvoiced frames are excluded from pitch statistics but are
+    included in timing calculations.
+    """
+    voiced = [f for f in frames if f.pitch_hz > 0]
+    if not voiced:
+        return PitchContour(
+            mean_pitch=0.0,
+            pitch_variance=0.0,
+            pitch_delta_hz_per_sec=0.0,
+            inflection_count=0,
+            trend="neutral",
+        )
+
+    pitches = [f.pitch_hz for f in voiced]
+    mean_p = sum(pitches) / len(pitches)
+    variance = sum((p - mean_p) ** 2 for p in pitches) / len(pitches)
+
+    # Mean absolute rate of pitch change between consecutive voiced frames
+    deltas: List[float] = []
+    for i in range(1, len(voiced)):
+        dt_ms = voiced[i].timestamp_ms - voiced[i - 1].timestamp_ms
+        dt_sec = dt_ms / 1000.0 if dt_ms > 0 else 0.001
+        dp = abs(voiced[i].pitch_hz - voiced[i - 1].pitch_hz)
+        deltas.append(dp / dt_sec)
+    mean_delta = sum(deltas) / len(deltas) if deltas else 0.0
+
+    # Count direction inversions (inflections)
+    directions: List[int] = []
+    for i in range(1, len(pitches)):
+        if pitches[i] > pitches[i - 1]:
+            directions.append(1)
+        elif pitches[i] < pitches[i - 1]:
+            directions.append(-1)
+        else:
+            directions.append(0)
+
+    inflections = 0
+    for i in range(1, len(directions)):
+        if (
+            directions[i] != 0
+            and directions[i - 1] != 0
+            and directions[i] != directions[i - 1]
+        ):
+            inflections += 1
+
+    # Overall trend: compare last pitch to first
+    overall_delta = pitches[-1] - pitches[0] if len(pitches) >= 2 else 0.0
+    if overall_delta > 20.0:
+        trend = "rising"
+    elif overall_delta < -20.0:
+        trend = "falling"
+    elif inflections >= 2:
+        trend = "variable"
+    else:
+        trend = "neutral"
+
+    return PitchContour(
+        mean_pitch=round(mean_p, 2),
+        pitch_variance=round(variance, 2),
+        pitch_delta_hz_per_sec=round(mean_delta, 2),
+        inflection_count=inflections,
+        trend=trend,
+    )
+
+
+def _classify_sentence_pattern(
+    frames: List[VoiceFrame], contour: PitchContour
+) -> str:
+    """
+    Classify sentence prosodic type from contour features and text punctuation.
+
+    Returns one of: ``"declarative"``, ``"interrogative"``, ``"exclamatory"``,
+    ``"trailing"``.
+    """
+    full_text = " ".join(f.text_fragment for f in frames).strip()
+
+    if full_text.endswith("?") or contour.trend == "rising":
+        return "interrogative"
+
+    if full_text.endswith("!") or contour.mean_pitch >= _VOICE_PITCH_HIGH:
+        return "exclamatory"
+
+    # Trailing-off: falling pitch AND last frame significantly quieter than first
+    if contour.trend == "falling" and len(frames) >= 2:
+        if frames[-1].amplitude_db < frames[0].amplitude_db - 10.0:
+            return "trailing"
+
+    return "declarative"
+
+
+def _derive_emotion(
+    contour: PitchContour, mean_speed: float
+) -> Tuple[str, float]:
+    """
+    Derive (emotion, intensity) from pitch contour and speech rate.
+
+    Classification priority
+    -----------------------
+    1. High pitch + high speed + variable contour → :data:`EMOTION_DISTRESSED`
+    2. High pitch + high speed                    → :data:`EMOTION_EXCITED`
+    3. Rising contour + moderate speed            → :data:`EMOTION_UNCERTAIN`
+    4. Low pitch + rapid delta                    → :data:`EMOTION_ASSERTIVE`
+    5. Default                                    → :data:`EMOTION_CALM`
+
+    Returns:
+        Tuple of (emotion_constant, intensity_in_0_1).
+    """
+    pitch = contour.mean_pitch
+    delta = contour.pitch_delta_hz_per_sec
+
+    if (
+        pitch >= _VOICE_PITCH_HIGH
+        and mean_speed >= _VOICE_SPEED_FAST
+        and contour.trend == "variable"
+    ):
+        intensity = min(1.0, (pitch - _VOICE_PITCH_HIGH) / 100.0 + 0.5)
+        return EMOTION_DISTRESSED, round(intensity, 3)
+
+    if pitch >= _VOICE_PITCH_HIGH and mean_speed >= _VOICE_SPEED_FAST:
+        intensity = min(1.0, (mean_speed - _VOICE_SPEED_FAST) / 100.0 + 0.5)
+        return EMOTION_EXCITED, round(intensity, 3)
+
+    if (
+        contour.trend == "rising"
+        and _VOICE_SPEED_SLOW <= mean_speed <= _VOICE_SPEED_FAST
+    ):
+        intensity = min(1.0, contour.inflection_count / 5.0 + 0.3)
+        return EMOTION_UNCERTAIN, round(intensity, 3)
+
+    if pitch <= _VOICE_PITCH_LOW and delta >= _VOICE_PITCH_RAPID_DELTA:
+        intensity = min(1.0, delta / 200.0 + 0.4)
+        return EMOTION_ASSERTIVE, round(intensity, 3)
+
+    # Default calm — intensity inversely proportional to distance from 160 Hz
+    intensity = max(0.1, 1.0 - abs(pitch - 160.0) / 200.0)
+    return EMOTION_CALM, round(intensity, 3)
 
 
 # ---------------------------------------------------------------------------
