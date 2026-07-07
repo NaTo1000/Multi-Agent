@@ -1702,11 +1702,12 @@ class TestComputePitchContour:
         assert c.trend == "falling"
 
     def test_variable_trend_with_inflections(self):
+        # Start ≈ end so overall delta ≤ 20; multiple direction reversals → "variable"
         frames = [
             VoiceFrame(pitch_hz=150.0, timestamp_ms=0.0),
             VoiceFrame(pitch_hz=200.0, timestamp_ms=100.0),
             VoiceFrame(pitch_hz=120.0, timestamp_ms=200.0),
-            VoiceFrame(pitch_hz=180.0, timestamp_ms=300.0),
+            VoiceFrame(pitch_hz=155.0, timestamp_ms=300.0),  # ≈ start → delta = 5
         ]
         c = _compute_pitch_contour(frames)
         assert c.inflection_count >= 2
