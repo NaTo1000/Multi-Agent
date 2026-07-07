@@ -43,17 +43,22 @@ def build_orchestrator(config: dict):
 
 
 def load_config(config_path: str) -> dict:
-    """Load YAML config if available, else return empty dict."""
+    """Load YAML config, then overlay secrets from the vault."""
+    from lib.vault import load_secrets
+
     try:
         import yaml
         with open(config_path, encoding="utf-8") as f:
-            return yaml.safe_load(f) or {}
+            config = yaml.safe_load(f) or {}
     except FileNotFoundError:
         logger.info("Config file not found at %s — using defaults", config_path)
-        return {}
+        config = {}
     except ImportError:
         logger.warning("PyYAML not installed — using defaults")
-        return {}
+        config = {}
+
+    load_secrets(config)
+    return config
 
 
 # ------------------------------------------------------------------
@@ -210,8 +215,9 @@ def main():
         description="Multi-Agent ESP32 Orchestration System"
     )
     parser.add_argument(
-        "--mode", choices=["server", "demo", "cli"], default="server",
-        help="Execution mode (default: server)"
+        "--mode", choices=["server", "demo", "cli", "multi-agent"],
+        default="server",
+        help="Execution mode (default: server)",
     )
     parser.add_argument("--host", default="0.0.0.0", help="API server bind host")
     parser.add_argument("--port", type=int, default=8000, help="API server port")
@@ -223,6 +229,13 @@ def main():
         choices=["DEBUG", "INFO", "WARNING", "ERROR"],
     )
     parser.add_argument("--log-dir", default=None, help="Directory for log files")
+    parser.add_argument(
+        "--prompt", "-p", default=None, metavar="PROMPT",
+        help=(
+            "One-shot inference prompt (--mode multi-agent only). "
+            "Runs a single non-interactive inference pass and exits."
+        ),
+    )
     args = parser.parse_args()
 
     setup_logging(level=args.log_level, log_dir=args.log_dir)
@@ -236,6 +249,9 @@ def main():
         asyncio.run(run_demo(orchestrator))
     elif args.mode == "cli":
         asyncio.run(run_cli(orchestrator))
+    elif args.mode == "multi-agent":
+        from cli.multi_agent_cli import run_multi_agent
+        asyncio.run(run_multi_agent(orchestrator, config, prompt=args.prompt))
 
 
 if __name__ == "__main__":
