@@ -4,7 +4,19 @@ AI automation package
 
 from .automation import AutomationEngine
 from .frequency_lock import FrequencyLockController
-from .chaimera3sp import CHAiMERA3sp, CHAiMERAProvider
+from .chaimera3sp import (
+    CHAiMERAProvider,
+    CHAiMERA3sp,
+    TraceryNode,
+    SeriesPattern,
+    AccuracyReport,
+    DataResearchReport,
+    TraceryStore,
+    KnowledgeScraper,
+    SeriesDecipher,
+    AccuracyScrutineer,
+    InferenceStreamMonitor,
+)
 from .tlc import (
     TLCModule,
     TechnicalObservation,
@@ -24,6 +36,22 @@ from .tlc import (
     PredictiveReasoner,
     Prediction,
     AutonomousDecision,
+    # Voice analysis
+    VoiceFrame,
+    PitchContour,
+    SentencePattern,
+    EmotionalState,
+    CortexCouncilRecommendation,
+    CompassionResponse,
+    CompassionInventory,
+    VoiceAnalysisEngine,
+    TWINBRAiN,
+    # Voice emotion constants
+    EMOTION_CALM,
+    EMOTION_EXCITED,
+    EMOTION_DISTRESSED,
+    EMOTION_UNCERTAIN,
+    EMOTION_ASSERTIVE,
 )
 
 __all__ = [
@@ -31,6 +59,15 @@ __all__ = [
     "FrequencyLockController",
     "CHAiMERA3sp",
     "CHAiMERAProvider",
+    "TraceryNode",
+    "SeriesPattern",
+    "AccuracyReport",
+    "DataResearchReport",
+    "TraceryStore",
+    "KnowledgeScraper",
+    "SeriesDecipher",
+    "AccuracyScrutineer",
+    "InferenceStreamMonitor",
     "TLCModule",
     "TechnicalObservation",
     "KnowledgeEntry",
@@ -49,4 +86,20 @@ __all__ = [
     "PredictiveReasoner",
     "Prediction",
     "AutonomousDecision",
+    # Voice analysis
+    "VoiceFrame",
+    "PitchContour",
+    "SentencePattern",
+    "EmotionalState",
+    "CortexCouncilRecommendation",
+    "CompassionResponse",
+    "CompassionInventory",
+    "VoiceAnalysisEngine",
+    "TWINBRAiN",
+    "EMOTION_CALM",
+    "EMOTION_EXCITED",
+    "EMOTION_DISTRESSED",
+    "EMOTION_UNCERTAIN",
+    "EMOTION_ASSERTIVE",
 ]
+

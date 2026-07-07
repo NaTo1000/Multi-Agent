@@ -1596,3 +1596,655 @@ class TestTLCModulePredictivePipeline:
         json.dumps(dec.to_dict())
         json.dumps(report)
         json.dumps(session.to_dict())
+
+
+# ===========================================================================
+# Voice analysis imports
+# ===========================================================================
+
+from ai.tlc import (
+    VoiceFrame,
+    PitchContour,
+    SentencePattern,
+    EmotionalState,
+    CortexCouncilRecommendation,
+    CompassionResponse,
+    CompassionInventory,
+    VoiceAnalysisEngine,
+    TWINBRAiN,
+    _compute_pitch_contour,
+    _classify_sentence_pattern,
+    _derive_emotion,
+    EMOTION_CALM,
+    EMOTION_EXCITED,
+    EMOTION_DISTRESSED,
+    EMOTION_UNCERTAIN,
+    EMOTION_ASSERTIVE,
+    _VOICE_PITCH_LOW,
+    _VOICE_PITCH_HIGH,
+    _VOICE_SPEED_SLOW,
+    _VOICE_SPEED_FAST,
+    _VOICE_PITCH_RAPID_DELTA,
+    _SENTENCE_WINDOW,
+    _SENTENCE_GAP_MS,
+    _CORTEX_COUNCIL_PROTOCOLS,
+)
+
+
+# ===========================================================================
+# VoiceFrame
+# ===========================================================================
+
+class TestVoiceFrame:
+    def test_defaults(self):
+        f = VoiceFrame()
+        assert f.pitch_hz == 0.0
+        assert f.speed_wpm == 120.0
+        assert f.amplitude_db == -20.0
+        assert f.text_fragment == ""
+        assert isinstance(f.frame_id, str) and len(f.frame_id) == 8
+
+    def test_custom_values(self):
+        f = VoiceFrame(pitch_hz=180.0, speed_wpm=150.0, text_fragment="hello")
+        assert f.pitch_hz == 180.0
+        assert f.text_fragment == "hello"
+
+    def test_to_dict_keys(self):
+        f = VoiceFrame(pitch_hz=160.0)
+        d = f.to_dict()
+        for k in ("frame_id", "timestamp_ms", "pitch_hz", "speed_wpm",
+                  "amplitude_db", "text_fragment"):
+            assert k in d
+
+    def test_to_dict_serialisable(self):
+        d = VoiceFrame(pitch_hz=200.0, text_fragment="test").to_dict()
+        json.dumps(d)
+
+
+# ===========================================================================
+# _compute_pitch_contour
+# ===========================================================================
+
+class TestComputePitchContour:
+    def test_empty_frames_returns_neutral(self):
+        c = _compute_pitch_contour([])
+        assert c.trend == "neutral"
+        assert c.mean_pitch == 0.0
+        assert c.inflection_count == 0
+
+    def test_single_voiced_frame(self):
+        f = VoiceFrame(pitch_hz=160.0, timestamp_ms=0.0)
+        c = _compute_pitch_contour([f])
+        assert c.mean_pitch == 160.0
+        assert c.trend == "neutral"
+
+    def test_unvoiced_frames_ignored(self):
+        frames = [VoiceFrame(pitch_hz=0.0) for _ in range(5)]
+        c = _compute_pitch_contour(frames)
+        assert c.mean_pitch == 0.0
+
+    def test_rising_trend(self):
+        frames = [
+            VoiceFrame(pitch_hz=100.0, timestamp_ms=0.0),
+            VoiceFrame(pitch_hz=140.0, timestamp_ms=100.0),
+            VoiceFrame(pitch_hz=190.0, timestamp_ms=200.0),
+        ]
+        c = _compute_pitch_contour(frames)
+        assert c.trend == "rising"
+
+    def test_falling_trend(self):
+        frames = [
+            VoiceFrame(pitch_hz=200.0, timestamp_ms=0.0),
+            VoiceFrame(pitch_hz=160.0, timestamp_ms=100.0),
+            VoiceFrame(pitch_hz=110.0, timestamp_ms=200.0),
+        ]
+        c = _compute_pitch_contour(frames)
+        assert c.trend == "falling"
+
+    def test_variable_trend_with_inflections(self):
+        frames = [
+            VoiceFrame(pitch_hz=150.0, timestamp_ms=0.0),
+            VoiceFrame(pitch_hz=200.0, timestamp_ms=100.0),
+            VoiceFrame(pitch_hz=120.0, timestamp_ms=200.0),
+            VoiceFrame(pitch_hz=180.0, timestamp_ms=300.0),
+        ]
+        c = _compute_pitch_contour(frames)
+        assert c.inflection_count >= 2
+        assert c.trend == "variable"
+
+    def test_pitch_variance_computed(self):
+        frames = [
+            VoiceFrame(pitch_hz=100.0, timestamp_ms=0.0),
+            VoiceFrame(pitch_hz=200.0, timestamp_ms=100.0),
+        ]
+        c = _compute_pitch_contour(frames)
+        assert c.pitch_variance > 0.0
+
+    def test_to_dict_keys(self):
+        c = _compute_pitch_contour([VoiceFrame(pitch_hz=150.0, timestamp_ms=0.0)])
+        d = c.to_dict()
+        for k in ("mean_pitch", "pitch_variance", "pitch_delta_hz_per_sec",
+                  "inflection_count", "trend"):
+            assert k in d
+
+
+# ===========================================================================
+# _classify_sentence_pattern
+# ===========================================================================
+
+class TestClassifySentencePattern:
+    def _frames(self, text=""):
+        return [VoiceFrame(text_fragment=text, timestamp_ms=0.0)]
+
+    def _contour(self, trend="neutral", mean_pitch=160.0):
+        return PitchContour(
+            mean_pitch=mean_pitch, pitch_variance=0.0,
+            pitch_delta_hz_per_sec=0.0, inflection_count=0, trend=trend
+        )
+
+    def test_question_mark_gives_interrogative(self):
+        frames = self._frames("Is this working?")
+        t = _classify_sentence_pattern(frames, self._contour())
+        assert t == "interrogative"
+
+    def test_rising_trend_gives_interrogative(self):
+        t = _classify_sentence_pattern(
+            self._frames("I think so"), self._contour(trend="rising")
+        )
+        assert t == "interrogative"
+
+    def test_exclamation_mark_gives_exclamatory(self):
+        frames = self._frames("That is great!")
+        t = _classify_sentence_pattern(frames, self._contour())
+        assert t == "exclamatory"
+
+    def test_high_pitch_gives_exclamatory(self):
+        t = _classify_sentence_pattern(
+            self._frames("wow"),
+            self._contour(mean_pitch=_VOICE_PITCH_HIGH + 10)
+        )
+        assert t == "exclamatory"
+
+    def test_default_declarative(self):
+        t = _classify_sentence_pattern(
+            self._frames("The frequency is 915 MHz."), self._contour()
+        )
+        assert t == "declarative"
+
+    def test_trailing_falling_quiet(self):
+        frames = [
+            VoiceFrame(text_fragment="I just", amplitude_db=-10.0, timestamp_ms=0.0),
+            VoiceFrame(text_fragment="don't know", amplitude_db=-25.0, timestamp_ms=100.0),
+        ]
+        t = _classify_sentence_pattern(frames, self._contour(trend="falling"))
+        assert t == "trailing"
+
+
+# ===========================================================================
+# _derive_emotion
+# ===========================================================================
+
+class TestDeriveEmotion:
+    def _contour(self, mean_pitch=160.0, trend="neutral", inflections=0, delta=0.0):
+        return PitchContour(
+            mean_pitch=mean_pitch, pitch_variance=0.0,
+            pitch_delta_hz_per_sec=delta, inflection_count=inflections, trend=trend
+        )
+
+    def test_distressed_high_pitch_fast_variable(self):
+        c = self._contour(mean_pitch=_VOICE_PITCH_HIGH + 20, trend="variable")
+        emotion, intensity = _derive_emotion(c, _VOICE_SPEED_FAST + 20)
+        assert emotion == EMOTION_DISTRESSED
+        assert 0.0 < intensity <= 1.0
+
+    def test_excited_high_pitch_fast_nonvariable(self):
+        c = self._contour(mean_pitch=_VOICE_PITCH_HIGH + 10, trend="neutral")
+        emotion, intensity = _derive_emotion(c, _VOICE_SPEED_FAST + 10)
+        assert emotion == EMOTION_EXCITED
+
+    def test_uncertain_rising_moderate_speed(self):
+        c = self._contour(mean_pitch=160.0, trend="rising", inflections=3)
+        emotion, intensity = _derive_emotion(c, (_VOICE_SPEED_SLOW + _VOICE_SPEED_FAST) / 2)
+        assert emotion == EMOTION_UNCERTAIN
+
+    def test_assertive_low_pitch_rapid_delta(self):
+        c = self._contour(
+            mean_pitch=_VOICE_PITCH_LOW - 10, delta=_VOICE_PITCH_RAPID_DELTA + 20
+        )
+        emotion, intensity = _derive_emotion(c, 130.0)
+        assert emotion == EMOTION_ASSERTIVE
+
+    def test_calm_default(self):
+        c = self._contour(mean_pitch=160.0, trend="neutral")
+        emotion, intensity = _derive_emotion(c, 130.0)
+        assert emotion == EMOTION_CALM
+        assert 0.0 < intensity <= 1.0
+
+    def test_intensity_clamped_to_one(self):
+        c = self._contour(mean_pitch=_VOICE_PITCH_HIGH + 200, trend="variable")
+        _, intensity = _derive_emotion(c, _VOICE_SPEED_FAST + 500)
+        assert intensity <= 1.0
+
+
+# ===========================================================================
+# EmotionalState
+# ===========================================================================
+
+class TestEmotionalState:
+    def _make(self):
+        contour = PitchContour(
+            mean_pitch=160.0, pitch_variance=0.0,
+            pitch_delta_hz_per_sec=0.0, inflection_count=0, trend="neutral"
+        )
+        sentence = SentencePattern(contour=contour)
+        return EmotionalState(
+            emotion=EMOTION_CALM, intensity=0.5,
+            pitch_signature=contour, sentence_pattern=sentence,
+            confidence=0.8
+        )
+
+    def test_to_dict_keys(self):
+        d = self._make().to_dict()
+        for k in ("emotion", "intensity", "pitch_signature",
+                  "sentence_pattern", "timestamp_ms", "confidence"):
+            assert k in d
+
+    def test_serialisable(self):
+        json.dumps(self._make().to_dict())
+
+
+# ===========================================================================
+# CortexCouncilRecommendation
+# ===========================================================================
+
+class TestCortexCouncilRecommendation:
+    def test_to_dict_keys(self):
+        rec = CortexCouncilRecommendation(
+            command="REDUCE_STRESS_SIGNAL",
+            neuromodulator="cortisol_reduce",
+            synthesis_intensity=0.7,
+            rationale="test",
+        )
+        d = rec.to_dict()
+        for k in ("recommendation_id", "command", "neuromodulator",
+                  "synthesis_intensity", "rationale", "timestamp_ms"):
+            assert k in d
+
+    def test_serialisable(self):
+        json.dumps(CortexCouncilRecommendation(command="X").to_dict())
+
+    def test_unique_ids(self):
+        ids = {CortexCouncilRecommendation().recommendation_id for _ in range(10)}
+        assert len(ids) == 10
+
+
+# ===========================================================================
+# CompassionResponse
+# ===========================================================================
+
+class TestCompassionResponse:
+    def test_defaults(self):
+        r = CompassionResponse()
+        assert r.effective is None
+        assert r.resonance_score == 0.0
+
+    def test_to_dict_includes_effective(self):
+        r = CompassionResponse(effective=True)
+        d = r.to_dict()
+        assert d["effective"] is True
+
+    def test_serialisable(self):
+        json.dumps(CompassionResponse(response_text="Hello").to_dict())
+
+
+# ===========================================================================
+# CompassionInventory
+# ===========================================================================
+
+class TestCompassionInventory:
+    def _inventory_with_responses(self):
+        inv = CompassionInventory()
+        inv.add(CompassionResponse(
+            emotional_trigger=EMOTION_DISTRESSED,
+            situational_tags=["conflict", "uncertainty"],
+            response_text="You are not alone.",
+            resonance_score=0.7,
+        ))
+        inv.add(CompassionResponse(
+            emotional_trigger=EMOTION_CALM,
+            situational_tags=["work"],
+            response_text="Stay grounded.",
+            resonance_score=0.6,
+        ))
+        return inv
+
+    def test_size(self):
+        inv = self._inventory_with_responses()
+        assert inv.size == 2
+
+    def test_query_returns_emotion_match_first(self):
+        inv = self._inventory_with_responses()
+        results = inv.query(EMOTION_DISTRESSED, ["conflict"])
+        assert results[0].emotional_trigger == EMOTION_DISTRESSED
+
+    def test_query_respects_min_resonance(self):
+        inv = self._inventory_with_responses()
+        results = inv.query(EMOTION_CALM, [], min_resonance=0.9)
+        assert results == []
+
+    def test_query_empty_inventory(self):
+        assert CompassionInventory().query(EMOTION_CALM, []) == []
+
+    def test_record_outcome_increases_resonance(self):
+        inv = CompassionInventory()
+        r = CompassionResponse(resonance_score=0.5)
+        inv.add(r)
+        inv.record_outcome(r.response_id, effective=True)
+        assert inv.get_all()[0].resonance_score > 0.5
+
+    def test_record_outcome_decreases_resonance(self):
+        inv = CompassionInventory()
+        r = CompassionResponse(resonance_score=0.5)
+        inv.add(r)
+        inv.record_outcome(r.response_id, effective=False)
+        assert inv.get_all()[0].resonance_score < 0.5
+
+    def test_resonance_clamped_below_zero(self):
+        inv = CompassionInventory()
+        r = CompassionResponse(resonance_score=0.05)
+        inv.add(r)
+        inv.record_outcome(r.response_id, effective=False)
+        assert inv.get_all()[0].resonance_score >= 0.0
+
+    def test_resonance_clamped_above_one(self):
+        inv = CompassionInventory()
+        r = CompassionResponse(resonance_score=0.95)
+        inv.add(r)
+        inv.record_outcome(r.response_id, effective=True)
+        assert inv.get_all()[0].resonance_score <= 1.0
+
+    def test_record_outcome_unknown_id_no_error(self):
+        inv = CompassionInventory()
+        inv.record_outcome("nonexistent", effective=True)  # no exception
+
+    def test_get_all_returns_copy(self):
+        inv = self._inventory_with_responses()
+        all_r = inv.get_all()
+        all_r.clear()
+        assert inv.size == 2
+
+    def test_jaccard_tag_similarity(self):
+        inv = CompassionInventory()
+        inv.add(CompassionResponse(
+            emotional_trigger=EMOTION_UNCERTAIN,
+            situational_tags=["a", "b", "c"],
+            resonance_score=0.5,
+        ))
+        inv.add(CompassionResponse(
+            emotional_trigger=EMOTION_UNCERTAIN,
+            situational_tags=["a", "b"],
+            resonance_score=0.5,
+        ))
+        results = inv.query(EMOTION_UNCERTAIN, ["a", "b", "c"])
+        # First result should be the one with all three tags matching
+        assert set(results[0].situational_tags) == {"a", "b", "c"}
+
+
+# ===========================================================================
+# VoiceAnalysisEngine
+# ===========================================================================
+
+class TestVoiceAnalysisEngine:
+    def _frame(self, pitch=160.0, speed=130.0, amp=-15.0, ts=0.0, text=""):
+        return VoiceFrame(
+            pitch_hz=pitch, speed_wpm=speed, amplitude_db=amp,
+            timestamp_ms=ts, text_fragment=text
+        )
+
+    def test_buffer_accumulates_below_window(self):
+        engine = VoiceAnalysisEngine(sentence_window=5)
+        for i in range(4):
+            result = engine.process_frame(self._frame(ts=float(i * 50)))
+        assert result is None
+        assert engine.sentence_count == 0
+
+    def test_window_flush_produces_emotional_state(self):
+        engine = VoiceAnalysisEngine(sentence_window=3)
+        results = []
+        for i in range(3):
+            r = engine.process_frame(self._frame(pitch=160.0, ts=float(i * 50)))
+            if r:
+                results.append(r)
+        assert len(results) == 1
+        assert isinstance(results[0], EmotionalState)
+
+    def test_gap_flush_produces_emotional_state(self):
+        engine = VoiceAnalysisEngine(sentence_window=10)
+        engine.process_frame(self._frame(ts=0.0))
+        # Send frame after large gap
+        result = engine.process_frame(self._frame(ts=_SENTENCE_GAP_MS + 50))
+        assert result is not None
+        assert engine.sentence_count >= 1
+
+    def test_flush_empty_buffer_returns_none(self):
+        engine = VoiceAnalysisEngine()
+        assert engine.flush() is None
+
+    def test_flush_nonempty_buffer_returns_state(self):
+        engine = VoiceAnalysisEngine(sentence_window=10)
+        engine.process_frame(self._frame(pitch=150.0, ts=0.0))
+        state = engine.flush()
+        assert isinstance(state, EmotionalState)
+
+    def test_emotion_count_grows(self):
+        engine = VoiceAnalysisEngine(sentence_window=2)
+        for i in range(6):
+            engine.process_frame(self._frame(ts=float(i * 10)))
+        assert engine.emotion_count >= 3
+
+    def test_get_recent_emotions_limited(self):
+        engine = VoiceAnalysisEngine(sentence_window=1)
+        for i in range(10):
+            engine.process_frame(self._frame(ts=float(i * 300)))
+        recent = engine.get_recent_emotions(n=3)
+        assert len(recent) <= 3
+
+    def test_make_cortex_recommendation_calm(self):
+        engine = VoiceAnalysisEngine(sentence_window=2)
+        engine.process_frame(self._frame(pitch=160.0, speed=130.0, ts=0.0))
+        state = engine.flush()
+        rec = engine.make_cortex_recommendation(state)
+        assert isinstance(rec, CortexCouncilRecommendation)
+        assert rec.command == _CORTEX_COUNCIL_PROTOCOLS[state.emotion]["command"]
+
+    def test_make_cortex_recommendation_synthesis_intensity_scaled(self):
+        engine = VoiceAnalysisEngine(sentence_window=1)
+        state = engine.flush() or EmotionalState(
+            emotion=EMOTION_DISTRESSED,
+            intensity=0.8,
+            pitch_signature=PitchContour(260.0, 0.0, 0.0, 0, "variable"),
+            sentence_pattern=SentencePattern(),
+            confidence=0.8,
+        )
+        state.emotion = EMOTION_DISTRESSED
+        state.intensity = 0.8
+        rec = engine.make_cortex_recommendation(state)
+        proto_intensity = _CORTEX_COUNCIL_PROTOCOLS[EMOTION_DISTRESSED]["synthesis_intensity"]
+        assert abs(rec.synthesis_intensity - round(proto_intensity * 0.8, 3)) < 0.001
+
+    def test_all_emotions_have_cortex_protocol(self):
+        engine = VoiceAnalysisEngine()
+        for emotion in (EMOTION_CALM, EMOTION_EXCITED, EMOTION_DISTRESSED,
+                        EMOTION_UNCERTAIN, EMOTION_ASSERTIVE):
+            contour = PitchContour(160.0, 0.0, 0.0, 0, "neutral")
+            sentence = SentencePattern(contour=contour)
+            state = EmotionalState(
+                emotion=emotion, intensity=0.5,
+                pitch_signature=contour, sentence_pattern=sentence,
+                confidence=0.6
+            )
+            rec = engine.make_cortex_recommendation(state)
+            assert rec.neuromodulator != ""
+            assert rec.command != ""
+
+
+# ===========================================================================
+# TWINBRAiN
+# ===========================================================================
+
+class TestTWINBRAiN:
+    def _state(self, emotion=EMOTION_CALM, intensity=0.5, confidence=0.7):
+        contour = PitchContour(160.0, 0.0, 0.0, 0, "neutral")
+        sentence = SentencePattern(contour=contour)
+        return EmotionalState(
+            emotion=emotion, intensity=intensity,
+            pitch_signature=contour, sentence_pattern=sentence,
+            confidence=confidence
+        )
+
+    def test_generate_responses_returns_list(self):
+        tb = TWINBRAiN()
+        responses = tb.generate_responses(self._state(), ["work"])
+        assert isinstance(responses, list)
+
+    def test_generate_responses_populates_inventory(self):
+        tb = TWINBRAiN()
+        tb.generate_responses(self._state(EMOTION_DISTRESSED), ["conflict"])
+        assert tb.inventory.size > 0
+
+    def test_response_count_increments(self):
+        tb = TWINBRAiN()
+        tb.generate_responses(self._state(), [])
+        assert tb.response_count > 0
+
+    def test_generates_correct_emotion_trigger(self):
+        tb = TWINBRAiN()
+        responses = tb.generate_responses(self._state(EMOTION_UNCERTAIN), ["decision"])
+        for r in responses:
+            assert r.emotional_trigger == EMOTION_UNCERTAIN
+
+    def test_all_emotions_generate_responses(self):
+        for emotion in (EMOTION_CALM, EMOTION_EXCITED, EMOTION_DISTRESSED,
+                        EMOTION_UNCERTAIN, EMOTION_ASSERTIVE):
+            tb = TWINBRAiN()
+            responses = tb.generate_responses(self._state(emotion), [])
+            assert len(responses) > 0
+
+    def test_second_call_draws_from_inventory(self):
+        tb = TWINBRAiN()
+        tb.generate_responses(self._state(EMOTION_CALM), ["a"])
+        size_after_first = tb.inventory.size
+        tb.generate_responses(self._state(EMOTION_CALM), ["a"], top_n=2)
+        # Should reuse existing inventory entries
+        assert tb.inventory.size >= size_after_first
+
+    def test_record_outcome_updates_resonance(self):
+        tb = TWINBRAiN()
+        responses = tb.generate_responses(self._state(), [])
+        rid = responses[0].response_id
+        before = responses[0].resonance_score
+        tb.record_outcome(rid, effective=True)
+        after = tb.inventory.get_all()[0].resonance_score
+        assert after > before
+
+    def test_get_inventory_snapshot(self):
+        tb = TWINBRAiN()
+        tb.generate_responses(self._state(), [])
+        snap = tb.get_inventory_snapshot()
+        assert len(snap) > 0
+
+    def test_responses_sorted_by_resonance_desc(self):
+        tb = TWINBRAiN()
+        responses = tb.generate_responses(self._state(), [], top_n=3)
+        scores = [r.resonance_score for r in responses]
+        assert scores == sorted(scores, reverse=True)
+
+    def test_top_n_respected(self):
+        tb = TWINBRAiN()
+        responses = tb.generate_responses(self._state(), [], top_n=2)
+        assert len(responses) <= 2
+
+
+# ===========================================================================
+# TLCModule voice pipeline
+# ===========================================================================
+
+class TestTLCModuleVoicePipeline:
+    def _frame(self, pitch=160.0, speed=130.0, ts=0.0, text=""):
+        return VoiceFrame(
+            pitch_hz=pitch, speed_wpm=speed,
+            timestamp_ms=ts, text_fragment=text
+        )
+
+    def test_process_voice_frame_returns_none_while_buffering(self):
+        module = TLCModule()
+        result = module.process_voice_frame(self._frame(ts=0.0))
+        assert result is None
+
+    def test_process_voice_frame_returns_recommendation_on_flush(self):
+        engine = VoiceAnalysisEngine(sentence_window=2)
+        module = TLCModule(voice_engine=engine)
+        module.process_voice_frame(self._frame(ts=0.0))
+        rec = module.process_voice_frame(self._frame(ts=50.0))
+        assert isinstance(rec, CortexCouncilRecommendation)
+        assert rec.command != ""
+
+    def test_flush_voice_buffer_empty_returns_none(self):
+        module = TLCModule()
+        assert module.flush_voice_buffer() is None
+
+    def test_flush_voice_buffer_returns_recommendation(self):
+        module = TLCModule()
+        module.process_voice_frame(self._frame(ts=0.0))
+        rec = module.flush_voice_buffer()
+        assert isinstance(rec, CortexCouncilRecommendation)
+
+    def test_get_twin_brain_responses_after_voice_processing(self):
+        engine = VoiceAnalysisEngine(sentence_window=1)
+        module = TLCModule(voice_engine=engine)
+        module.process_voice_frame(self._frame(pitch=160.0, ts=0.0))
+        responses = module.get_twin_brain_responses(EMOTION_CALM)
+        assert isinstance(responses, list)
+
+    def test_get_twin_brain_responses_empty_before_any_voice(self):
+        module = TLCModule()
+        responses = module.get_twin_brain_responses(EMOTION_DISTRESSED, top_n=3)
+        assert isinstance(responses, list)
+
+    def test_record_compassion_outcome_no_error(self):
+        module = TLCModule()
+        module.record_compassion_outcome("fake-id", effective=True)
+
+    def test_voice_processing_with_situation_tags(self):
+        engine = VoiceAnalysisEngine(sentence_window=1)
+        module = TLCModule(voice_engine=engine)
+        rec = module.process_voice_frame(
+            self._frame(pitch=160.0, ts=0.0),
+            situation_tags=["work", "pressure"]
+        )
+        # Buffer flushed after 1 frame with window=1
+        assert isinstance(rec, CortexCouncilRecommendation)
+
+    def test_flush_populates_twin_brain_inventory(self):
+        module = TLCModule()
+        module.process_voice_frame(self._frame(pitch=165.0, ts=0.0))
+        module.flush_voice_buffer(situation_tags=["test"])
+        responses = module.get_twin_brain_responses(
+            EMOTION_CALM, situation_tags=["test"]
+        )
+        assert isinstance(responses, list)
+
+    def test_cortex_recommendation_neuromodulator_nonempty(self):
+        engine = VoiceAnalysisEngine(sentence_window=2)
+        module = TLCModule(voice_engine=engine)
+        module.process_voice_frame(self._frame(ts=0.0))
+        rec = module.process_voice_frame(self._frame(ts=80.0))
+        assert rec.neuromodulator != ""
+
+    def test_gap_between_frames_triggers_recommendation(self):
+        module = TLCModule()
+        module.process_voice_frame(self._frame(ts=0.0))
+        rec = module.process_voice_frame(
+            self._frame(ts=_SENTENCE_GAP_MS + 100)
+        )
+        assert isinstance(rec, CortexCouncilRecommendation)

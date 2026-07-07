@@ -2285,6 +2285,331 @@ class DreamStateEngine:
 
 
 # ---------------------------------------------------------------------------
+# CompassionInventory
+# ---------------------------------------------------------------------------
+
+
+class CompassionInventory:
+    """
+    Stores and retrieves prior :class:`CompassionResponse` patterns for
+    the :class:`TWINBRAiN` engine.
+
+    Lookup is similarity-ranked using a combined score:
+
+    .. code-block:: text
+
+        similarity = 0.5 × emotion_match + 0.5 × Jaccard(situational_tags)
+
+    where ``emotion_match = 1.0`` when the emotional trigger is identical,
+    ``0.0`` otherwise, and Jaccard = |intersection| / |union| of tag sets.
+    """
+
+    def __init__(self) -> None:
+        self._responses: List[CompassionResponse] = []
+
+    @property
+    def size(self) -> int:
+        """Total responses in the inventory."""
+        return len(self._responses)
+
+    def add(self, response: CompassionResponse) -> None:
+        """Append a new compassion response to the inventory."""
+        self._responses.append(response)
+
+    def query(
+        self,
+        emotional_trigger: str,
+        situational_tags: List[str],
+        top_n: int = 10,
+        min_resonance: float = 0.0,
+    ) -> List[CompassionResponse]:
+        """
+        Return up to *top_n* responses ranked by similarity.
+
+        Args:
+            emotional_trigger: Target emotion identifier.
+            situational_tags:  Context tags for Jaccard matching.
+            top_n:             Maximum results to return.
+            min_resonance:     Exclude responses below this resonance score.
+
+        Returns:
+            Similarity-ranked :class:`CompassionResponse` list.
+        """
+        tag_set = set(situational_tags)
+        scored: List[Tuple[float, CompassionResponse]] = []
+
+        for resp in self._responses:
+            if resp.resonance_score < min_resonance:
+                continue
+            emotion_sim = 1.0 if resp.emotional_trigger == emotional_trigger else 0.0
+            resp_tags = set(resp.situational_tags)
+            union = len(tag_set | resp_tags)
+            tag_sim = len(tag_set & resp_tags) / union if union > 0 else 1.0
+            similarity = 0.5 * emotion_sim + 0.5 * tag_sim
+            scored.append((similarity, resp))
+
+        scored.sort(key=lambda x: x[0], reverse=True)
+        return [r for _, r in scored[:top_n]]
+
+    def record_outcome(self, response_id: str, effective: bool) -> None:
+        """
+        Record whether a compassion response was effective and adjust its
+        resonance score accordingly (+0.10 if effective, −0.10 if not).
+        """
+        for resp in self._responses:
+            if resp.response_id == response_id:
+                resp.effective = effective
+                delta = 0.10 if effective else -0.10
+                resp.resonance_score = round(
+                    max(0.0, min(1.0, resp.resonance_score + delta)), 3
+                )
+                break
+
+    def get_all(self) -> List[CompassionResponse]:
+        """Return a shallow copy of all stored responses."""
+        return list(self._responses)
+
+
+# ---------------------------------------------------------------------------
+# VoiceAnalysisEngine
+# ---------------------------------------------------------------------------
+
+
+class VoiceAnalysisEngine:
+    """
+    Processes :class:`VoiceFrame` inputs, groups them into
+    :class:`SentencePattern` objects, derives :class:`EmotionalState` per
+    sentence, and emits :class:`CortexCouncilRecommendation` objects.
+
+    The engine maintains a rolling frame buffer.  A sentence boundary is
+    detected when either:
+
+    * The gap between the new frame and the previous buffered frame exceeds
+      ``_SENTENCE_GAP_MS`` (200 ms by default), **or**
+    * The buffer reaches ``sentence_window`` frames.
+
+    Both triggers flush the buffer via :meth:`_flush_sentence`.
+    """
+
+    def __init__(self, sentence_window: int = _SENTENCE_WINDOW) -> None:
+        self._sentence_window = sentence_window
+        self._frame_buffer: List[VoiceFrame] = []
+        self._sentence_history: List[SentencePattern] = []
+        self._emotion_history: List[EmotionalState] = []
+
+    @property
+    def sentence_count(self) -> int:
+        """Number of completed sentences processed so far."""
+        return len(self._sentence_history)
+
+    @property
+    def emotion_count(self) -> int:
+        """Number of emotional states derived so far."""
+        return len(self._emotion_history)
+
+    def process_frame(self, frame: VoiceFrame) -> Optional[EmotionalState]:
+        """
+        Add *frame* to the rolling buffer.
+
+        Returns an :class:`EmotionalState` when a sentence boundary is
+        triggered; returns ``None`` while the buffer is still accumulating.
+        """
+        if self._frame_buffer:
+            gap = frame.timestamp_ms - self._frame_buffer[-1].timestamp_ms
+            if gap >= _SENTENCE_GAP_MS:
+                result = self._flush_sentence()
+                self._frame_buffer.append(frame)
+                return result
+
+        self._frame_buffer.append(frame)
+
+        if len(self._frame_buffer) >= self._sentence_window:
+            return self._flush_sentence()
+
+        return None
+
+    def flush(self) -> Optional[EmotionalState]:
+        """Force-flush whatever frames remain in the buffer."""
+        if self._frame_buffer:
+            return self._flush_sentence()
+        return None
+
+    def _flush_sentence(self) -> Optional[EmotionalState]:
+        frames = list(self._frame_buffer)
+        self._frame_buffer.clear()
+
+        if not frames:
+            return None
+
+        contour = _compute_pitch_contour(frames)
+        pattern_type = _classify_sentence_pattern(frames, contour)
+        mean_speed = sum(f.speed_wpm for f in frames) / len(frames)
+        start_ms = frames[0].timestamp_ms
+        end_ms = frames[-1].timestamp_ms
+        duration_ms = end_ms - start_ms if end_ms > start_ms else 0.0
+
+        sentence = SentencePattern(
+            frames=frames,
+            contour=contour,
+            mean_speed=round(mean_speed, 2),
+            pattern_type=pattern_type,
+            duration_ms=round(duration_ms, 2),
+        )
+        self._sentence_history.append(sentence)
+
+        voiced_count = sum(1 for f in frames if f.pitch_hz > 0)
+        confidence = _confidence(voiced_count, len(frames))
+        emotion, intensity = _derive_emotion(contour, mean_speed)
+
+        state = EmotionalState(
+            emotion=emotion,
+            intensity=intensity,
+            pitch_signature=contour,
+            sentence_pattern=sentence,
+            confidence=confidence,
+        )
+        self._emotion_history.append(state)
+
+        logger.debug(
+            "VoiceAnalysisEngine | emotion=%s intensity=%.2f "
+            "pitch=%.1fHz speed=%.0fwpm pattern=%s",
+            emotion, intensity, contour.mean_pitch, mean_speed, pattern_type,
+        )
+        return state
+
+    def get_recent_emotions(self, n: int = 5) -> List[EmotionalState]:
+        """Return the *n* most recent :class:`EmotionalState` objects."""
+        return list(self._emotion_history[-n:])
+
+    def make_cortex_recommendation(
+        self, state: EmotionalState
+    ) -> CortexCouncilRecommendation:
+        """
+        Map *state* to a :class:`CortexCouncilRecommendation` using
+        ``_CORTEX_COUNCIL_PROTOCOLS``.
+
+        The ``synthesis_intensity`` in the recommendation is the product of
+        the protocol's baseline intensity and the detected emotion intensity,
+        so calm states produce lower synthesis commands than distressed ones.
+        """
+        proto = _CORTEX_COUNCIL_PROTOCOLS.get(
+            state.emotion, _CORTEX_COUNCIL_PROTOCOLS[EMOTION_CALM]
+        )
+        return CortexCouncilRecommendation(
+            emotional_state=state,
+            command=proto["command"],
+            neuromodulator=proto["neuromodulator"],
+            synthesis_intensity=round(
+                proto["synthesis_intensity"] * state.intensity, 3
+            ),
+            rationale=proto["rationale"],
+        )
+
+
+# ---------------------------------------------------------------------------
+# TWINBRAiN
+# ---------------------------------------------------------------------------
+
+
+class TWINBRAiN:
+    """
+    Real-time compassion response generator.
+
+    Uses the :class:`CompassionInventory` of prior patterns combined with
+    incoming :class:`EmotionalState` signals to generate ranked
+    :class:`CompassionResponse` objects that evolve by the millisecond
+    in differential combinational time spaces.
+
+    Architecture
+    ------------
+    1. Receives :class:`EmotionalState` + situational context tags.
+    2. Queries the :class:`CompassionInventory` for similar prior patterns.
+    3. When inventory coverage is insufficient, generates new responses from
+       ``_COMPASSION_TEMPLATES``, personalised with context tags and emotion
+       intensity.
+    4. Records all generated responses back into the inventory for cumulative
+       learning.
+    5. Exposes :meth:`record_outcome` to close the effectiveness feedback loop.
+    """
+
+    def __init__(
+        self, inventory: Optional[CompassionInventory] = None
+    ) -> None:
+        self._inventory = inventory or CompassionInventory()
+        self._response_count: int = 0
+
+    @property
+    def inventory(self) -> CompassionInventory:
+        """The underlying :class:`CompassionInventory`."""
+        return self._inventory
+
+    @property
+    def response_count(self) -> int:
+        """Total responses generated since creation."""
+        return self._response_count
+
+    def generate_responses(
+        self,
+        state: EmotionalState,
+        situation_tags: List[str],
+        top_n: int = 5,
+    ) -> List[CompassionResponse]:
+        """
+        Generate ranked compassion responses for *state*.
+
+        Returns the top-*n* inventory matches, supplemented by
+        template-derived responses when the inventory has insufficient
+        coverage.
+
+        Args:
+            state:          Detected emotional state.
+            situation_tags: Active contextual situation tags.
+            top_n:          Maximum responses to return.
+
+        Returns:
+            Resonance-ranked :class:`CompassionResponse` list.
+        """
+        existing = self._inventory.query(state.emotion, situation_tags, top_n=top_n)
+
+        if len(existing) >= top_n:
+            return existing
+
+        needed = top_n - len(existing)
+        templates = _COMPASSION_TEMPLATES.get(state.emotion, [])
+        new_responses: List[CompassionResponse] = []
+
+        for i, template in enumerate(templates[:needed]):
+            text = template.format(
+                tags=(
+                    ", ".join(situation_tags) if situation_tags else "the current situation"
+                ),
+                intensity=f"{state.intensity:.0%}",
+            )
+            resp = CompassionResponse(
+                emotional_trigger=state.emotion,
+                situational_tags=list(situation_tags),
+                response_text=text,
+                resonance_score=round(0.5 + state.confidence * 0.3, 3),
+                timestamp_ms=state.timestamp_ms + i * _TWINBRAIN_SLICE_MS,
+            )
+            self._inventory.add(resp)
+            new_responses.append(resp)
+            self._response_count += 1
+
+        combined = existing + new_responses
+        combined.sort(key=lambda r: r.resonance_score, reverse=True)
+        return combined[:top_n]
+
+    def record_outcome(self, response_id: str, effective: bool) -> None:
+        """Record whether a compassion response was effective."""
+        self._inventory.record_outcome(response_id, effective)
+
+    def get_inventory_snapshot(self) -> List[CompassionResponse]:
+        """Return a full snapshot of the compassion inventory."""
+        return self._inventory.get_all()
+
+
+# ---------------------------------------------------------------------------
 # TLCModule
 # ---------------------------------------------------------------------------
 
@@ -2302,6 +2627,8 @@ class TLCModule:
         dream_engine:   Optional external :class:`DreamStateEngine`.
         anomaly_filter: Optional external :class:`AnomalyFilter`.
         reasoner:       Optional external :class:`PredictiveReasoner`.
+        voice_engine:   Optional external :class:`VoiceAnalysisEngine`.
+        twin_brain:     Optional external :class:`TWINBRAiN`.
     """
 
     def __init__(
@@ -2311,12 +2638,16 @@ class TLCModule:
         dream_engine: Optional[DreamStateEngine] = None,
         anomaly_filter: Optional["AnomalyFilter"] = None,
         reasoner: Optional["PredictiveReasoner"] = None,
+        voice_engine: Optional[VoiceAnalysisEngine] = None,
+        twin_brain: Optional[TWINBRAiN] = None,
     ) -> None:
         self._store = store or TechnicalKnowledgeStore()
         self._recognizer = recognizer or PatternRecognizer()
         self._dream_engine = dream_engine or DreamStateEngine()
         self._anomaly_filter = anomaly_filter or AnomalyFilter()
         self._reasoner = reasoner or PredictiveReasoner()
+        self._voice_engine = voice_engine or VoiceAnalysisEngine()
+        self._twin_brain = twin_brain or TWINBRAiN()
 
     # ------------------------------------------------------------------
     # Public API
@@ -2562,3 +2893,107 @@ class TLCModule:
             "by_domain": dict(by_domain),
             "by_task": dict(by_task),
         }
+
+    # ------------------------------------------------------------------
+    # Voice analysis pipeline
+    # ------------------------------------------------------------------
+
+    def process_voice_frame(
+        self,
+        frame: VoiceFrame,
+        situation_tags: Optional[List[str]] = None,
+    ) -> Optional[CortexCouncilRecommendation]:
+        """
+        Process a :class:`VoiceFrame` through the voice analysis pipeline.
+
+        When a sentence boundary is detected the engine derives an
+        :class:`EmotionalState`, maps it to a :class:`CortexCouncilRecommendation`
+        for chemical-synthetic feel synthesis, and triggers
+        :class:`TWINBRAiN` to generate situationally-matched compassion
+        response patterns.
+
+        Args:
+            frame:          Captured voice frame with pitch, speed, and text.
+            situation_tags: Contextual tags describing the current situation
+                            (e.g. ``["conflict", "uncertainty"]``).
+
+        Returns:
+            A :class:`CortexCouncilRecommendation` when a sentence boundary is
+            reached; ``None`` while the frame buffer is still accumulating.
+        """
+        tags = situation_tags or []
+        state = self._voice_engine.process_frame(frame)
+        if state is None:
+            return None
+
+        recommendation = self._voice_engine.make_cortex_recommendation(state)
+        self._twin_brain.generate_responses(state, tags)
+
+        logger.info(
+            "TLC voice | emotion=%s intensity=%.2f command=%s neuromodulator=%s",
+            state.emotion, state.intensity,
+            recommendation.command, recommendation.neuromodulator,
+        )
+        return recommendation
+
+    def flush_voice_buffer(
+        self,
+        situation_tags: Optional[List[str]] = None,
+    ) -> Optional[CortexCouncilRecommendation]:
+        """
+        Force-flush the current voice frame buffer as a completed sentence.
+
+        Useful at the end of an utterance when no further frames are expected.
+
+        Args:
+            situation_tags: Contextual tags for compassion pattern matching.
+
+        Returns:
+            A :class:`CortexCouncilRecommendation`, or ``None`` if the buffer
+            was already empty.
+        """
+        tags = situation_tags or []
+        state = self._voice_engine.flush()
+        if state is None:
+            return None
+        recommendation = self._voice_engine.make_cortex_recommendation(state)
+        self._twin_brain.generate_responses(state, tags)
+        return recommendation
+
+    def get_twin_brain_responses(
+        self,
+        emotion: str,
+        situation_tags: Optional[List[str]] = None,
+        top_n: int = 5,
+    ) -> List[CompassionResponse]:
+        """
+        Query the TWINBRAiN :class:`CompassionInventory` for ranked prior
+        compassion response patterns.
+
+        Args:
+            emotion:        Target ``EMOTION_*`` constant to match.
+            situation_tags: Contextual tags for Jaccard similarity narrowing.
+            top_n:          Maximum number of responses to return.
+
+        Returns:
+            Resonance-ranked list of :class:`CompassionResponse` patterns drawn
+            from all prior interactions and template seeds.
+        """
+        tags = situation_tags or []
+        return self._twin_brain.inventory.query(emotion, tags, top_n=top_n)
+
+    def record_compassion_outcome(
+        self, response_id: str, effective: bool
+    ) -> None:
+        """
+        Record whether a TWINBRAiN compassion response was effective.
+
+        Updates the resonance score of the matching inventory entry so future
+        lookups rank effective responses higher.
+
+        Args:
+            response_id: The ``response_id`` of the :class:`CompassionResponse`.
+            effective:   ``True`` if the response was positively received.
+        """
+        self._twin_brain.record_outcome(response_id, effective)
+
