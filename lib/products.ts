@@ -14,9 +14,11 @@ export const PRODUCTS: Product[] = [
     description: "Perfect for individuals and small projects",
     priceInCents: 2900, // $29/month
     features: [
-      "Up to 3 AI agents",
+      "Up to 3 orchestration agents",
       "10,000 API calls/month",
-      "Basic orchestration",
+      "Basic fleet orchestration",
+      "OTA firmware generation",
+      "WiFi and BLE device support",
       "Community support",
       "Standard latency",
     ],
@@ -27,13 +29,15 @@ export const PRODUCTS: Product[] = [
     description: "For growing teams and production workloads",
     priceInCents: 9900, // $99/month
     features: [
-      "Up to 15 AI agents",
+      "Up to 15 orchestration agents",
       "100,000 API calls/month",
-      "Advanced orchestration",
+      "Advanced fleet orchestration",
+      "GPS/GNSS telemetry support",
       "Priority support",
       "Low latency",
       "Custom workflows",
       "Analytics dashboard",
+      "Webhook and scheduler automation",
     ],
     popular: true,
   },
@@ -43,14 +47,16 @@ export const PRODUCTS: Product[] = [
     description: "For large organizations with custom needs",
     priceInCents: 29900, // $299/month
     features: [
-      "Unlimited AI agents",
+      "Unlimited orchestration agents",
       "Unlimited API calls",
-      "Enterprise orchestration",
+      "Enterprise fleet orchestration",
       "Dedicated support",
       "Ultra-low latency",
       "Custom integrations",
       "SLA guarantee",
       "On-premise option",
+      "Multi-cloud connector support",
+      "Custom firmware pipelines",
     ],
   },
 ]

@@ -5,8 +5,9 @@ import "./globals.css"
 const inter = Inter({ subsets: ["latin"], variable: "--font-inter" })
 
 export const metadata: Metadata = {
-  title: "Multi-Agent | AI Agent Orchestration Platform",
-  description: "Build and deploy powerful multi-agent AI systems. Orchestrate multiple AI agents to work together seamlessly for complex automation tasks.",
+  title: "Multi-Agent | ESP32 Fleet Orchestration Platform",
+  description:
+    "Coordinate ESP32 fleets with AI-assisted orchestration, OTA firmware generation, live telemetry, GPS/GNSS tracking, and cloud-connected automation.",
 }
 
 export default function RootLayout({

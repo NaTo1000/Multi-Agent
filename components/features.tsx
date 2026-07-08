@@ -10,33 +10,63 @@ import {
 const features = [
   {
     icon: Zap,
-    title: "Lightning Fast",
-    description: "Ultra-low latency orchestration ensures your AI agents respond in milliseconds, not seconds.",
+    title: "Fleet orchestration",
+    description: "Coordinate ESP32 modules and specialized agents from one runtime without losing observability.",
+    bullets: [
+      "Concurrent task scheduling across device fleets",
+      "Agent routing for frequency, modulation, comms, firmware, and AI",
+      "REST and WebSocket control surfaces for operators and dashboards",
+    ],
   },
   {
     icon: GitBranch,
-    title: "Advanced Orchestration",
-    description: "Coordinate multiple AI agents with sophisticated routing, branching, and parallel execution.",
+    title: "Adaptive radio control",
+    description: "Respond to real-world interference with intelligent scanning, locking, and tuning workflows.",
+    bullets: [
+      "Band scan, lock, and fine-tune device frequencies",
+      "Adaptive modulation strategies for changing link conditions",
+      "Fleet-wide synchronization for coordinated rollouts",
+    ],
   },
   {
     icon: Shield,
-    title: "Enterprise Security",
-    description: "SOC 2 compliant infrastructure with end-to-end encryption and role-based access control.",
+    title: "Resilient operations",
+    description: "Keep device operations dependable with telemetry retention, health checks, and protected admin tooling.",
+    bullets: [
+      "Structured event logging with audit and error views",
+      "Health monitors, scheduler jobs, and webhook automation",
+      "Admin configuration, terminal, and recovery workflows",
+    ],
   },
   {
     icon: BarChart3,
-    title: "Real-time Analytics",
-    description: "Monitor agent performance, track costs, and optimize workflows with detailed insights.",
+    title: "Live telemetry",
+    description: "Track device state, events, and orchestration activity as it happens across your deployment.",
+    bullets: [
+      "Real-time event streaming over WebSocket",
+      "Centralized metrics for agents, tasks, and mirror snapshots",
+      "Audit trails that help operators diagnose incidents quickly",
+    ],
   },
   {
     icon: Workflow,
-    title: "Custom Workflows",
-    description: "Build complex multi-agent pipelines with our visual workflow builder or code-first SDK.",
+    title: "Firmware automation",
+    description: "Assemble feature-based firmware variants and deliver them to devices without leaving the platform.",
+    bullets: [
+      "On-the-fly firmware generation from reusable templates",
+      "Optional compile-and-flash flows for OTA updates",
+      "Feature modules for WiFi, BLE, GPS, and custom defines",
+    ],
   },
   {
     icon: Globe,
-    title: "Global Edge Network",
-    description: "Deploy agents closer to your users with automatic edge routing and failover.",
+    title: "Connected everywhere",
+    description: "Bridge local device control with cloud systems and mobile clients built for field operations.",
+    bullets: [
+      "HTTP, AWS IoT, GCP Pub/Sub, and Azure IoT integrations",
+      "Cross-platform mobile companion for iOS and Android",
+      "GPS/GNSS and BLE support for hardware-aware workflows",
+    ],
   },
 ]
 
@@ -68,6 +98,13 @@ export function Features() {
               <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
                 {feature.description}
               </p>
+              <ul className="mt-4 space-y-2">
+                {feature.bullets.map((bullet) => (
+                  <li key={bullet} className="text-sm leading-relaxed text-muted-foreground">
+                    • {bullet}
+                  </li>
+                ))}
+              </ul>
             </div>
           ))}
         </div>
