@@ -34,6 +34,8 @@ logs/
 /tmp/
 
 # Node modules (app/)
+node_modules/
+.next/
 app/node_modules/
 app/.expo/
 
