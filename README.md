@@ -16,7 +16,8 @@ A production-grade multi-agent orchestration platform for managing fleets of ESP
 | **WiFi** | STA connection, network scanning, mDNS, HTTP API server on device |
 | **BLE 5** | 2M PHY advertising, GATT command server, paired-app communication |
 | **GPS / GNSS** | NMEA 0183 parsing, async serial reading, fix streaming |
-| **Cloud** | HTTP, AWS IoT Core, GCP Pub/Sub, Azure IoT Hub |
+| **Cloud** | Configurable webhook (HTTP / own VPS / local), AWS IoT Core, GCP Pub/Sub, Azure IoT Hub |
+| **Compute** | Pluggable offload — local VPS (default), AWS Lambda, GCP Cloud Functions |
 | **REST + WebSocket API** | FastAPI server for mobile apps and web dashboards |
 | **Real-time Logging** | Structured JSON logging, rotating files, threshold alerts |
 | **Cross-platform App** | React Native (iOS + Android) companion app |
@@ -131,6 +132,10 @@ with `arduino-cli` (FQBN: `esp32:esp32:esp32`).
 | POST | `/api/v1/ai/optimise/{device_id}` | AI-driven device optimisation |
 | POST | `/api/v1/ai/research` | AI research query |
 
+Cloud webhook (`cloud_push`) and compute offload (`compute_offload`) are
+dispatched through `/api/v1/tasks` to the comms agent — see
+[Cloud Integration](#cloud-integration) and [Compute Backends](#compute-backends).
+
 ---
 
 ## Mobile App
@@ -172,15 +177,42 @@ and `WiFiManager` uses `nmcli` (available by default on RPi OS).
 
 ## Cloud Integration
 
-Configure the cloud connector in `config/default.yaml`:
+The telemetry webhook is fully configurable — send it to AWS, Google Cloud,
+Azure, or your own VPS / local server.
+
+Configure the connector in `config/default.yaml`:
 
 ```yaml
 comms_agent:
-  cloud_connector: "aws"    # http | aws | gcp | azure
+  cloud_connector: "aws"    # http | vps | local | aws | gcp | azure
   cloud_endpoint: "https://your-endpoint.amazonaws.com"
 ```
 
-Or override per-request via the `/api/v1/tasks` endpoint:
+Or use the nested style:
+
+```yaml
+comms_agent:
+  cloud_connector:
+    backend: "gcp"
+    endpoint: "projects/my-project/topics/esp32-telemetry"
+```
+
+### Self-hosted (VPS / local server)
+
+Point the webhook at your own server — no cloud account needed:
+
+```yaml
+comms_agent:
+  cloud_connector: "vps"
+  cloud_endpoint: "https://my-vps.example.com"
+  path_prefix: "/telemetry"
+  api_key: "your-shared-secret"
+```
+
+### Per-request override
+
+Override the connector per call via the `/api/v1/tasks` endpoint:
+
 ```json
 {
   "agent_id": "<comms-agent-id>",
@@ -191,6 +223,40 @@ Or override per-request via the `/api/v1/tasks` endpoint:
   }
 }
 ```
+
+---
+
+## Compute Backends
+
+Heavy jobs (firmware builds, AI batch work, ...) can run on the local host,
+your own VPS, AWS Lambda, or GCP Cloud Functions:
+
+```yaml
+compute:
+  backend: "local"      # local | vps | aws | gcp
+  endpoint: ""          # local/vps worker URL, or GCP function URL
+  function: ""          # AWS Lambda function name
+  aws_region: "us-east-1"
+```
+
+Offload a job via the `compute_offload` task:
+
+```json
+{
+  "agent_id": "<comms-agent-id>",
+  "task": "compute_offload",
+  "params": {
+    "backend": "aws",
+    "function": "firmware-builder",
+    "job": "firmware_build",
+    "payload": {"features": ["wifi", "ble"]}
+  }
+}
+```
+
+- `local` (default) — runs in-process; set `endpoint` to POST the job to your own worker instead.
+- `aws` — invokes the configured Lambda function (requires `boto3`).
+- `gcp` — POSTs the job to the configured Cloud Function / Cloud Run URL.
 
 ---
 
@@ -217,7 +283,7 @@ python main.py --mode cli
 ├── ai/                 AI automation engine and PID frequency lock controller
 ├── comms/              WiFi, BLE, GPS/GNSS host-side managers
 ├── firmware/           Firmware builder, OTA flasher, and ESP32 C++ templates
-├── cloud/              Cloud connector (HTTP, AWS, GCP, Azure)
+├── cloud/              Cloud connectors (HTTP/VPS/local, AWS, GCP, Azure) and compute backends
 ├── api/                FastAPI REST + WebSocket server
 ├── logging_system/     Structured logging and telemetry monitor
 ├── app/                React Native cross-platform mobile app

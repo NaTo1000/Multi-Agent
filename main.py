@@ -32,11 +32,17 @@ def build_orchestrator(config: dict):
 
     orch = Orchestrator(config)
 
+    # Comms agent handles the configurable webhook + compute backend, so it
+    # also receives the top-level "compute" section from the config file.
+    comms_config = dict(config.get("comms_agent", {}))
+    if "compute" in config:
+        comms_config["compute"] = config["compute"]
+
     # Register all agents
     orch.register_agent(FrequencyAgent(config.get("frequency_agent", {})))
     orch.register_agent(ModulationAgent(config.get("modulation_agent", {})))
     orch.register_agent(FirmwareAgent(config.get("firmware_agent", {})))
-    orch.register_agent(CommsAgent(config.get("comms_agent", {})))
+    orch.register_agent(CommsAgent(comms_config))
     orch.register_agent(AIAgent(config.get("ai_agent", {})))
 
     return orch

@@ -31,6 +31,7 @@ class CommsAgent(AgentBase):
         "ble_advertise",
         "get_gps",
         "cloud_push",
+        "compute_offload",
         "diagnostics",
         "set_hostname",
     }
@@ -58,6 +59,8 @@ class CommsAgent(AgentBase):
             return await self._get_gps(device)
         if task == "cloud_push":
             return await self._cloud_push(params, device)
+        if task == "compute_offload":
+            return await self._compute_offload(params, device)
         if task == "diagnostics":
             return await self._diagnostics(device)
         if task == "set_hostname":
@@ -167,22 +170,63 @@ class CommsAgent(AgentBase):
         self, params: Dict[str, Any], device: Optional[ESP32Device]
     ) -> Dict[str, Any]:
         """
-        Push device telemetry to the configured cloud endpoint.
-        Supports AWS IoT, GCP Pub/Sub, Azure IoT Hub, and generic HTTP.
+        Push device telemetry to the configured webhook endpoint.
+        Supports AWS IoT, GCP Pub/Sub, Azure IoT Hub, generic HTTP, and
+        self-hosted VPS/local webhook listeners (``connector: vps|local``).
         """
         from cloud.connector import CloudConnector
 
-        connector_type = params.get("connector", self.config.get("cloud_connector", "http"))
-        endpoint = params.get("endpoint", self.config.get("cloud_endpoint", ""))
+        raw_connector = params.get("connector", self.config.get("cloud_connector", "http"))
+        if isinstance(raw_connector, dict):
+            # Nested style: cloud_connector: {backend: aws, endpoint: "..."}
+            connector_cfg = {**self.config, **raw_connector}
+            connector_type = str(raw_connector.get("backend", "http"))
+            endpoint = params.get("endpoint", raw_connector.get("endpoint", ""))
+        else:
+            connector_cfg = self.config
+            connector_type = str(raw_connector)
+            endpoint = params.get("endpoint", self.config.get("cloud_endpoint", ""))
         payload = device.to_dict() if device else params.get("payload", {})
 
-        connector = CloudConnector.create(connector_type, endpoint, self.config)
+        connector = CloudConnector.create(connector_type, endpoint, connector_cfg)
         ok = await connector.push(payload)
         logger.info("Cloud push (%s) for %s: %s",
                     connector_type,
                     device.device_id if device else "n/a",
                     "ok" if ok else "failed")
         return {"ok": ok, "connector": connector_type}
+
+    # ------------------------------------------------------------------
+    # Compute offload
+    # ------------------------------------------------------------------
+
+    async def _compute_offload(
+        self, params: Dict[str, Any], device: Optional[ESP32Device]
+    ) -> Dict[str, Any]:
+        """
+        Offload a heavy compute job to the configured backend.
+        Backends: local VPS (default), AWS Lambda, GCP Cloud Functions.
+        Per-request ``backend`` / ``endpoint`` / ``function`` override the
+        configured defaults.
+        """
+        from cloud.compute import ComputeBackend, compute_config_from_dict
+
+        compute_cfg = compute_config_from_dict(self.config)
+        for key in ("endpoint", "function", "api_key", "aws_region"):
+            if key in params:
+                compute_cfg[key] = params[key]
+        backend_type = str(params.get("backend", compute_cfg.get("backend", "local")))
+
+        job = params.get("job", "generic")
+        payload = params.get("payload")
+        if payload is None:
+            payload = device.to_dict() if device else {}
+
+        backend = ComputeBackend.create(backend_type, compute_cfg)
+        result = await backend.run(job, payload)
+        logger.info("Compute offload (%s) job '%s': %s",
+                    backend_type, job, "ok" if result.get("ok") else "failed")
+        return result
 
     # ------------------------------------------------------------------
     # Diagnostics

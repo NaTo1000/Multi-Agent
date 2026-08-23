@@ -21,8 +21,27 @@ firmware_agent:
 
 # Communications agent
 comms_agent:
-  cloud_connector: "http"         # http | aws | gcp | azure
-  cloud_endpoint: ""              # Set to your telemetry endpoint
+  # Telemetry webhook backend: http | vps | local | aws | gcp | azure
+  #   http/vps/local — generic HTTP POST webhook (point it at your own VPS
+  #                    or local server for a fully self-hosted backend)
+  #   aws            — AWS IoT Core (requires boto3)
+  #   gcp            — GCP Pub/Sub (requires google-cloud-pubsub)
+  #   azure          — Azure IoT Hub (requires azure-iot-device)
+  cloud_connector: "http"
+  cloud_endpoint: ""              # Webhook URL, AWS IoT endpoint, or "projects/{p}/topics/{t}"
+  # api_key: ""                   # Optional — sent as "Authorization: ******" for http/vps/local
+  # path_prefix: ""               # Optional path appended to the webhook endpoint
+  # aws_region: "us-east-1"       # AWS connector options
+  # aws_topic: "esp32/telemetry"
+  # azure_connection_string: ""   # Azure connector options
+
+# Compute offload backend (heavy jobs: firmware builds, AI batch work, ...)
+compute:
+  backend: "local"                # local | vps | aws | gcp
+  endpoint: ""                    # local/vps: your own worker URL; gcp: Cloud Function / Cloud Run URL
+  function: ""                    # aws: Lambda function name
+  # aws_region: "us-east-1"
+  # api_key: ""                   # Optional bearer token for http-style compute endpoints
 
 # AI agent
 ai_agent:

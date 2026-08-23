@@ -192,6 +192,52 @@ async def test_comms_gps_no_device():
     await agent.stop()
 
 
+@pytest.mark.asyncio
+async def test_comms_cloud_push_nested_connector_config():
+    """Nested cloud_connector {backend: ...} config resolves to the right connector."""
+    agent = CommsAgent({"cloud_connector": {"backend": "vps", "endpoint": ""}})
+    await agent.start()
+    result = await agent.execute("cloud_push", {"payload": {"k": 1}}, None)
+    assert result["ok"] is True  # empty endpoint → dev-mode success
+    assert result["connector"] == "vps"
+    await agent.stop()
+
+
+@pytest.mark.asyncio
+async def test_comms_compute_offload_defaults_to_local():
+    agent = CommsAgent()
+    await agent.start()
+    result = await agent.execute(
+        "compute_offload", {"job": "firmware_build", "payload": {}}, None
+    )
+    assert result["ok"] is True
+    assert result["backend"] == "local"
+    await agent.stop()
+
+
+@pytest.mark.asyncio
+async def test_comms_compute_offload_uses_config_section():
+    agent = CommsAgent({"compute": {"backend": "local"}})
+    await agent.start()
+    result = await agent.execute("compute_offload", {"job": "j"}, None)
+    assert result["backend"] == "local"
+    await agent.stop()
+
+
+@pytest.mark.asyncio
+async def test_comms_compute_offload_per_request_override():
+    """Per-request backend override wins over config; aws without function fails cleanly."""
+    agent = CommsAgent({"compute": {"backend": "local"}})
+    await agent.start()
+    result = await agent.execute(
+        "compute_offload", {"backend": "aws", "job": "j"}, None
+    )
+    assert result["backend"] == "aws"
+    assert result["ok"] is False
+    assert result["error"] == "function_required"
+    await agent.stop()
+
+
 # ------------------------------------------------------------------
 # Agent metrics
 # ------------------------------------------------------------------

@@ -1,11 +1,17 @@
 """
-Cloud connector — pluggable backends for telemetry upload and heavy compute offload.
+Cloud connector — pluggable webhook backends for telemetry upload.
 
-Supported connectors:
-  - http    : generic HTTP POST (default)
+Supported connectors (the user picks where the webhook points):
+  - http    : generic HTTP POST webhook (default)
+  - vps     : alias for "http" — point it at your own VPS
+  - local   : alias for "http" — a webhook listener on your local network
   - aws     : AWS IoT Core via MQTT / HTTPS
   - gcp     : GCP Pub/Sub
   - azure   : Azure IoT Hub
+
+Config keys honoured by the generic HTTP/VPS connector:
+  - api_key      : sent as ``Authorization: ******
+  - path_prefix  : appended to the endpoint (e.g. "/telemetry")
 """
 
 import json
@@ -40,23 +46,69 @@ class CloudConnector(ABC):
         endpoint: str,
         config: Optional[Dict[str, Any]] = None,
     ) -> "CloudConnector":
-        """Factory method."""
+        """
+        Factory method.
+
+        ``connector_type`` accepts ``http``, ``vps`` / ``local`` (self-hosted
+        webhook on your own VPS or local server), ``aws``, ``gcp``, or ``azure``.
+
+        When ``connector_type`` is unknown but a nested ``config["backend"]``
+        key is present, that value is used instead — this supports config
+        files written as::
+
+            cloud_connector:
+              backend: aws
+              endpoint: "https://..."
+
+        When ``endpoint`` is empty, ``config["endpoint"]`` is used as a
+        fallback for the same nested style.
+        """
         config = config or {}
         connectors = {
             "http": HTTPConnector,
+            "vps": HTTPConnector,
+            "local": HTTPConnector,
             "aws": AWSConnector,
             "gcp": GCPConnector,
             "azure": AzureConnector,
         }
         klass = connectors.get(connector_type.lower())
         if klass is None:
+            nested = config.get("backend")
+            if isinstance(nested, str):
+                klass = connectors.get(nested.lower())
+        if klass is None:
             raise ValueError(f"Unknown connector type: {connector_type}. "
-                             f"Choose from {list(connectors)}")
+                             f"Choose from {sorted(connectors)}")
+        if not endpoint and isinstance(config.get("endpoint"), str):
+            endpoint = config["endpoint"]
         return klass(endpoint, config)
 
 
 class HTTPConnector(CloudConnector):
-    """Generic HTTP POST connector."""
+    """
+    Generic HTTP POST webhook connector.
+
+    Also serves the ``vps`` and ``local`` connector types — point the
+    endpoint at your own VPS or local server to keep the whole backend
+    self-hosted.
+    """
+
+    def _url(self, path: str = "") -> str:
+        prefix = str(self.config.get("path_prefix", "")).strip("/")
+        url = self.endpoint.rstrip("/")
+        if prefix:
+            url = f"{url}/{prefix}"
+        if path:
+            url = f"{url}/{path.lstrip('/')}"
+        return url
+
+    def _headers(self) -> Dict[str, str]:
+        headers = {"Content-Type": "application/json"}
+        api_key = self.config.get("api_key", "")
+        if api_key:
+            headers["Authorization"] = f"******"
+        return headers
 
     async def push(self, payload: Dict[str, Any]) -> bool:
         if not self.endpoint:
@@ -64,11 +116,7 @@ class HTTPConnector(CloudConnector):
             return True  # Treat as success in development
         try:
             body = json.dumps(payload).encode()
-            headers = {
-                "Content-Type": "application/json",
-                "Authorization": f"Bearer {self.config.get('api_key', '')}",
-            }
-            req = urllib.request.Request(self.endpoint, data=body, headers=headers)
+            req = urllib.request.Request(self._url(), data=body, headers=self._headers())
             with urllib.request.urlopen(req, timeout=10) as resp:
                 return 200 <= resp.status < 300
         except urllib.error.HTTPError as exc:
@@ -82,7 +130,7 @@ class HTTPConnector(CloudConnector):
         if not self.endpoint:
             return None
         try:
-            url = f"{self.endpoint}/messages"
+            url = self._url("messages")
             if topic:
                 url += f"?topic={topic}"
             with urllib.request.urlopen(url, timeout=10) as resp:
@@ -103,7 +151,7 @@ class AWSConnector(CloudConnector):
             import boto3  # type: ignore
             client = boto3.client(
                 "iot-data",
-                endpoint_url=self.endpoint,
+                endpoint_url=self.endpoint or None,
                 region_name=self.config.get("aws_region", "us-east-1"),
             )
             topic = self.config.get("aws_topic", "esp32/telemetry")
